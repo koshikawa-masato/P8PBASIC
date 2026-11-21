@@ -2004,6 +2004,16 @@ void top_level(void)
             process_line(pc);
             continue;
         }
+        /* Direct mode: about to wait for a command line. The ROM is
+         * modelled as coming back here with a fresh display state,
+         * so a program that left the overlay register (port 0x53)
+         * hiding TEXT - then ended, stopped or errored out - does
+         * not leave the Ok prompt and the line editor's echo
+         * invisible. This is the only direct-mode read: a running
+         * program never comes through here (its INPUT / LINE INPUT
+         * call con_lineinput themselves, from stmt_input), and the
+         * queued boot "RUN" above is dispatched without reaching it. */
+        hal_pile_reset();
         res = con_lineinput(buf, sizeof(buf), 0);
         if (res < 0) {   /* STOP / CTRL+C */
             if (auto_mode) { auto_mode = 0; ok_needed = 1; }

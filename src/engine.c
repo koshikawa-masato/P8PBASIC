@@ -229,6 +229,13 @@ void p8_frame(P8Engine *e, unsigned char *rgba)
         ? halp8_gfx(halp8_gfx_display_page()) : blank_gfx;
     const unsigned char *vp[3];
     int x, y, gfx_on = halp8_gfx_visible();
+    /* Port 0x53 bits 1-3: graphics planes taken out of the display.
+     * Applied once, to the final colour index, AFTER the source
+     * (vessel pixel or interpreter pixel) has been chosen: masking
+     * the vessel pixel first would turn a hidden pixel into "no
+     * vessel pixel" and let the interpreter's stale pixel underneath
+     * show through. With the mask 0 this is the pre-pile path. */
+    int pile_mask = vessel_pile_plane_mask();
     (void)e;
     vp[0] = vessel_vram_plane(0);       /* B */
     vp[1] = vessel_vram_plane(1);       /* R */
@@ -249,6 +256,7 @@ void p8_frame(P8Engine *e, unsigned char *rgba)
                        | (((vp[2][off] >> bit) & 1) << 2);
                 if (vi) idx = vi;
             }
+            if (pile_mask) idx &= ~pile_mask;
             if (idx < 8) vessel_palette(idx, &r, &gg, &b);
             else halp8_palette(idx, &r, &gg, &b);
             p[0] = (unsigned char)r;
@@ -398,7 +406,9 @@ const unsigned short *p8_text_codes(P8Engine *e)
 {
     static const unsigned short blank_codes[25 * 80];
     (void)e;
-    if (!halp8_text_visible()) return blank_codes;
+    /* Port 0x53 bit0 hides the text plane; checked before the
+     * width-40 path below so both widths are covered. */
+    if (!halp8_text_visible() || vessel_text_hidden()) return blank_codes;
     if (halp8_width40()) return halp8_text_codes();
     merge_text();
     return merged_codes;
@@ -407,7 +417,7 @@ const unsigned char  *p8_text_attrs(P8Engine *e)
 {
     static const unsigned char blank_attrs[25 * 80];
     (void)e;
-    if (!halp8_text_visible()) return blank_attrs;
+    if (!halp8_text_visible() || vessel_text_hidden()) return blank_attrs;
     if (halp8_width40()) return halp8_text_attrs();
     merge_text();
     return merged_attrs;
@@ -416,4 +426,9 @@ void p8_cursor(P8Engine *e, int *x, int *y, int *visible)
 {
     (void)e;
     halp8_cursor(x, y, visible);
+    /* Same effective text visibility as p8_text_codes/p8_text_attrs:
+     * no cursor on a text plane that is not shown. Only the value
+     * handed to the host is gated; the HAL's cursor state is left
+     * alone, so the cursor comes back with the text. */
+    if (!halp8_text_visible() || vessel_text_hidden()) *visible = 0;
 }

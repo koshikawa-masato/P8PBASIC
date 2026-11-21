@@ -52,6 +52,8 @@ void hal_call(unsigned seg, unsigned off);
 /* ---- graphics (640x400, 4 planes) ---- */
 void hal_gon(int on);
 void hal_ton(int on);
+void hal_pile_reset(void);      /* SCREEN: overlay register (PC-88 port 0x53) back to 0 */
+void hal_text_clear_region(int top, int bot);   /* CLS: blank guest text image rows top..bot (PC-88 0xF3C8); no-op elsewhere */
 void hal_gpage(int active, int display);
 void hal_gpset(int x, int y, int c);
 int  hal_gpoint(int x, int y);

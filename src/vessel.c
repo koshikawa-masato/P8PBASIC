@@ -464,6 +464,34 @@ void vessel_palette(int idx, int *r, int *g, int *b)
     *b = vram_pal[idx][2] * 255 / 7;
 }
 
+/* Port 0x53 overlay state (docs/APPROXIMATIONS.md item 31).
+ * The byte is written on the engine thread (OUT, the SCREEN reset,
+ * the direct-mode restore) and read by the host's rendering thread
+ * through the two accessors below, so every access goes through
+ * these relaxed atomic helpers. A single byte with no ordering
+ * requirement against other state: relaxed is enough. */
+static void pile_store(unsigned char v)
+{
+    __atomic_store_n(&misc_port[0x53], v, __ATOMIC_RELAXED);
+}
+static unsigned char pile_load(void)
+{
+    return __atomic_load_n(&misc_port[0x53], __ATOMIC_RELAXED);
+}
+
+int vessel_text_hidden(void) { return (pile_load() & 0x01) != 0; }
+
+/* Hidden graphics planes as a mask over the frame's colour index
+ * (B = bit 0, R = bit 1, G = bit 2, as composed in engine.c
+ * p8_frame). The port's bits 0x02/0x04/0x08 are B/R/G in that same
+ * order, one position higher. */
+int vessel_pile_plane_mask(void) { return (pile_load() >> 1) & 0x07; }
+
+/* The ROM's SCREEN statement puts the overlay back to "show all"
+ * (called through hal_pile_reset from stmt_screen, and from
+ * top_level when the interpreter goes back to direct mode). */
+void vessel_pile_reset(void) { pile_store(0); }
+
 void vessel_set_palette(int idx, int r7, int g7, int b7)
 {
     if (idx < 0 || idx > 7) return;
@@ -840,6 +868,12 @@ void vessel_port_out(int port, int v)
     case 0xAC: opn_addr[1] = v; break;
     case 0xAD: opn_write(1, opn_addr[1], v); break;
     case 0x31: case 0x34: case 0x35: misc_port[port] = (unsigned char)v; break;
+    /* Screen overlay ("pile") register (QUASI88 pc88main.cpp case
+     * 0x53: grph_pile). bit0 hides TEXT, bits 1/2/3 hide the B/R/G
+     * graphics planes; consulted by the frame/text compositor through
+     * vessel_text_hidden / vessel_pile_plane_mask (engine.c).
+     * Atomic store: the rendering thread reads this byte. */
+    case 0x53: pile_store((unsigned char)v); break;
     case 0x32:
         misc_port[port] = (unsigned char)v;
         tb_line_update();       /* SINTM (bit 7) gates the sound line */
@@ -1440,6 +1474,10 @@ void vessel_session_reset(void)
     cfg_a_input = 1; cfg_b_input = 0; ppi_mode = 0;
     hostc = 0; prev_c = 0; latch = 0xFF; latched = 0; sub_dac = 0;
     /* ports, banking, ALU (idle = main RAM, latch empty), kanji ROM */
+    /* Plain memset, including the pile byte [0x53] that is otherwise
+     * only touched through pile_store/pile_load: the session reset
+     * runs from p8_start before the engine thread is created, so no
+     * engine thread exists to write the byte concurrently. */
     memset(misc_port, 0, sizeof(misc_port));
     kanji_addr[0] = kanji_addr[1] = 0;
     intr_level = 7;

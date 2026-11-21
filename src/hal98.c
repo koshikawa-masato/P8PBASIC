@@ -391,6 +391,8 @@ static const unsigned plane_seg[4] = { 0xA800, 0xB000, 0xB800, 0xE000 };
 
 void hal_gon(int on) { outp(0xA2, on ? 0x0D : 0x0C); }
 void hal_ton(int on) { (void)on; }
+void hal_pile_reset(void) { }
+void hal_text_clear_region(int top, int bot) { (void)top; (void)bot; }
 void hal_gpage(int active, int display) { outp(0xA6, active & 1); outp(0xA4, display & 1); }
 void hal_analog(int on) { outp(0x6A, on ? 0x01 : 0x00); }
 void hal_palette(int idx, int g, int r, int b)

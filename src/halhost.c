@@ -155,6 +155,8 @@ void hal_call(unsigned seg, unsigned off) { (void)seg; (void)off; }
 
 void hal_gon(int on) { (void)on; }
 void hal_ton(int on) { (void)on; }
+void hal_pile_reset(void) { }
+void hal_text_clear_region(int top, int bot) { (void)top; (void)bot; }
 void hal_gpage(int a, int d) { ap = a; (void)d; }
 void hal_gpset(int x, int y, int c) { if (x >= 0 && x < 640 && y >= 0 && y < 400) gv[ap][y][x] = (unsigned char)c; }
 int hal_gpoint(int x, int y) { if (x >= 0 && x < 640 && y >= 0 && y < 400) return gv[ap][y][x]; return -1; }

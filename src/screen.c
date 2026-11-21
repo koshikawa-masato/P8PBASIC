@@ -141,6 +141,8 @@ void scr_cls(void)
 {
     int y;
     for (y = con_top; y <= con_bot; y++) clear_row(y);
+    /* one text memory on hardware: image-resident text goes too */
+    hal_text_clear_region(con_top, con_bot);
     cur_x = 0; cur_y = con_top; pend_wrap = 0;
 }
 

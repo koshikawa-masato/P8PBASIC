@@ -167,6 +167,12 @@ void stmt_screen(void)
          * text plane at sw=0 and showed graphics at sw=3.) */
         g_on = !(sw & 2);
     }
+    /* Every SCREEN statement, with or without a switch argument,
+     * puts the overlay register (port 0x53) back to "show all": the
+     * text a program hid with OUT &H53,1 is back after its next
+     * SCREEN (MA2026: hidden at 1440 for play, visible again at
+     * *SELECT's SCREEN 0,2 with no OUT in between). */
+    hal_pile_reset();
     hal_gon(g_on && dp != 0);
 }
 

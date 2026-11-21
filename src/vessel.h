@@ -64,6 +64,12 @@ int  vessel_diag_snapshot(VesselDiag *out);
 int  vessel_port_in(int port);
 void vessel_port_out(int port, int value);
 
+/* Screen overlay ("pile") register, port 0x53: bit0 hides the TEXT
+ * plane, bits 0x02/0x04/0x08 hide the B/R/G graphics planes. */
+int  vessel_text_hidden(void);      /* 1 while port 0x53 bit0 is set */
+int  vessel_pile_plane_mask(void);  /* hidden planes as frame colour-index bits (B=1, R=2, G=4) */
+void vessel_pile_reset(void);       /* port 0x53 := 0 (the SCREEN statement) */
+
 #ifdef __cplusplus
 }
 #endif

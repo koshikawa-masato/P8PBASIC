@@ -184,6 +184,18 @@ void hal_call(unsigned seg, unsigned off) { (void)seg; (void)off; }
 
 void hal_gon(int on) { gon_flag = on; }
 void hal_ton(int on) { ton_flag = on; }
+void hal_pile_reset(void) { vessel_pile_reset(); }
+/* CLS reaches the guest text image too: on hardware the interpreter's
+ * screen and the image at 0xF3C8 are one memory (25 rows x 120 bytes:
+ * 80 codes + 20 attribute pairs), so text that only machine code
+ * wrote there must not survive a CLS. */
+void hal_text_clear_region(int top, int bot)
+{
+    if (top < 0) top = 0;
+    if (bot > 24) bot = 24;
+    if (top > bot) return;
+    memset(memory + 0xF3C8 + top * 120, 0, (size_t)(bot - top + 1) * 120);
+}
 int halp8_gfx_visible(void) { return gon_flag; }
 int halp8_text_visible(void) { return ton_flag; }
 /* Writes to the displayed page are mirrored into the vessel's GVRAM
