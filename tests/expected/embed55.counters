@@ -18,14 +18,14 @@
 #   b1_fm          bank-1 writes 30-FF: FM channels 4-6
 #   adpcm_b_reads  sample bytes the chip fetched from the ADPCM-B DRAM:
 #                  PCM actually played from the loaded block
-counter tb_irqs=3320
-counter vrtc_irqs=2872
-counter b0_ssg=8508
+counter tb_irqs=4366
+counter vrtc_irqs=2897
+counter b0_ssg=12551
 counter b0_rhythm=9
-counter b0_mode=8915
-counter b0_fm=13131
-counter b0_keyon=2262
-counter b0_tb=3322
-counter b1_adpcm=4055
-counter b1_fm=2749
-counter adpcm_b_reads=87387
+counter b0_mode=11899
+counter b0_fm=16633
+counter b0_keyon=3156
+counter b0_tb=4367
+counter b1_adpcm=5641
+counter b1_fm=2977
+counter adpcm_b_reads=158447

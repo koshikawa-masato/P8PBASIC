@@ -1230,6 +1230,15 @@ static int trap(void)
 #define REST_CELL   0xE80A      /* planted RET: the at-rest mainline PC */
 #define VRTC_PERIOD 66667L      /* 4 MHz CPU / 60 Hz */
 #define PUMP_SLICE  16667L      /* emulated cycles per vessel_pump() */
+/* Modelled cost of one BASIC statement, charged by vessel_statement()
+ * on every pass of exec_loop: ~0.5 ms at 4 MHz, the middle of the
+ * ROM interpreter's range for simple statements (roughly 500-4000
+ * cycles for a PRINT / LOCATE / READ / POKE / NEXT mix). A documented
+ * approximation (docs/APPROXIMATIONS.md item 6): PRINT-heavy programs
+ * run slightly fast, delay loops slightly slow. Charging the full
+ * PUMP_SLICE per statement, as before, made every statement cost
+ * 4.17 ms and stretched MA2026's song-list phase to 10.1 s. */
+#define STMT_CYCLES 2000L
 
 static int in_run = 0;
 static unsigned long last_cyc = 0;
@@ -1668,8 +1677,8 @@ static long run_loop(void)
 /* Advance emulated time while the native interpreter runs (BASIC is
  * the mainline; the Z80 only runs in bursts), and execute any
  * interrupt handlers that come due, on a sentinel stack like a call.
- * Called once per statement from exec_loop. */
-void vessel_pump(void)
+ * `cycles` is the emulated time this call accounts for. */
+static void pump_advance(long cycles)
 {
     int k;
     static unsigned long pump_count = 0;
@@ -1698,7 +1707,7 @@ void vessel_pump(void)
                 pump_count, tot, opn_nwrite[0x28], opn_nwrite[0x26],
                 (int)cpu.iff1, (int)cpu.int_pending);
     }
-    irq_advance(PUMP_SLICE);
+    irq_advance(cycles);
     /* Step the CPU whenever an interrupt is due OR already pending:
      * a vector queued at the tail of a driver call is only accepted
      * by a later step, so refusing to step while one is pending
@@ -1715,6 +1724,21 @@ void vessel_pump(void)
         run_loop();
         if (!cpu.int_pending && !vrtc_due && !tb_due) break;
     }
+}
+
+/* One full slice (PUMP_SLICE): for time that passes in bulk inside a
+ * single statement (vessel_burn's sector wait). */
+void vessel_pump(void)
+{
+    pump_advance(PUMP_SLICE);
+}
+
+/* One BASIC statement's modelled cost (STMT_CYCLES). Called on every
+ * pass of exec_loop, so the machine advances at the interpreter's
+ * pace while BASIC runs. */
+void vessel_statement(void)
+{
+    pump_advance(STMT_CYCLES);
 }
 
 void vessel_exec(unsigned entry)

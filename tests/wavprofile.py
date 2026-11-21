@@ -14,12 +14,20 @@ Usage:
   wavprofile.py embed FILE.wav      the full MA2026 embed run (55 s):
                                     the genuine order must hold --
                                     * >= 20 loud seconds (>= 3000) in 3..31
-                                      (loading BGM through the disk loads)
-                                    * some second in 33..44 below 3000
+                                      (loading BGM through the disk loads;
+                                      the first attract song also lands in
+                                      this window)
+                                    * some second in 21..32 below 3000
                                       (the quiet gap between BGM stop and
-                                      the attract songs)
-                                    * >= 5 loud seconds in 46..54
+                                      the first attract song: CG/comment
+                                      loads, the song-list draw and the
+                                      first song load)
+                                    * >= 5 loud seconds in 30..44
                                       (attract songs at full volume)
+                                    Windows re-derived 2026-11-21 after the
+                                    per-statement pacing fix (item 6):
+                                    measured BGM 1..22, gap 23..28, first
+                                    song from 29 in the 40 s run.
 
 Exit status 0 = pass, 1 = fail (reasons on stdout). Peaks are absolute
 sample maxima over both channels of a 44.1 kHz 16-bit stereo WAV.
@@ -71,11 +79,11 @@ def main():
         if n_bgm < 20:
             fails.append("loading-BGM window: only %d loud seconds in 3..31 "
                          "(want >= 20)" % n_bgm)
-        if not any(s < len(p) and p[s] < 3000 for s in range(33, 45)):
-            fails.append("no quiet second in 33..44 (BGM/attract gap missing)")
-        n_att = sum(1 for s in range(46, 55) if loud(s))
+        if not any(s < len(p) and p[s] < 3000 for s in range(21, 33)):
+            fails.append("no quiet second in 21..32 (BGM/attract gap missing)")
+        n_att = sum(1 for s in range(30, 45) if loud(s))
         if n_att < 5:
-            fails.append("attract window: only %d loud seconds in 46..54 "
+            fails.append("attract window: only %d loud seconds in 30..44 "
                          "(want >= 5)" % n_att)
     else:
         print("unknown mode", mode)

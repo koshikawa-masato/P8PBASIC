@@ -417,7 +417,9 @@ static void exec_loop(void)
     }
     for (;;) {
         u8 c;
-        vessel_pump();      /* PMD playback advances while BASIC runs */
+        vessel_statement(); /* the machine advances by one statement's
+                             * modelled cost while BASIC runs (PMD
+                             * playback included) */
         hal_poll();         /* embedded hosts may bail out here */
         str_temp_reset();
         if (running && hal_breakflag()) {

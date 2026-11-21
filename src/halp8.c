@@ -283,7 +283,7 @@ void hal_setdate(int y, int mo, int d) { (void)y; (void)mo; (void)d; }
  * lands here even when the guest never waits for input. This is
  * also the pacing point: once music is rendering, the interpreter
  * must not run ahead of the audio clock, or the host's ring buffer
- * overflows and playback tears. Checked every 64 statements: one check interval pumps ~0.27 s of emulated time, which the 2 s ring absorbs. */
+ * overflows and playback tears. Checked every 64 statements: one check interval advances ~0.03 s of emulated time on the statement path (APPROXIMATIONS item 6), ~0.27 s through sector burns, which the 2 s ring absorbs. */
 void hal_poll(void)
 {
     if (stop_req) p8_bail();
@@ -291,9 +291,9 @@ void hal_poll(void)
     if (stop_req) p8_bail();
     if (++poll_n < 64) return;
     poll_n = 0;
-    /* Each statement pumps ~4 ms of emulated time, so a fast host
-     * produces seconds of audio per check interval; sleep off the
-     * whole lead (in stop-responsive chunks), not a fixed cap. */
+    /* Each statement advances ~0.5 ms of emulated time, so a fast
+     * host produces seconds of audio per check interval; sleep off
+     * the whole lead (in stop-responsive chunks), not a fixed cap. */
     while (!stop_req) {
         double ahead = p8_audio_seconds() - p8_wall_seconds();
         long us;

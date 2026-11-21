@@ -113,7 +113,7 @@ P8PBASIC は PC-88 インタプリタとして機能させ、器ごと RetroDOS 
   Timer B が作る（カウンタ reg 0x26、制御 reg 0x27 = 0x3A で有効化）。
   器は I に空きページをプリセットし、VRTC と Timer B の両割り込みを
   配送する（`src/vessel.c` の割り込みモデル、BASIC 実行中は
-  `vessel_pump()` がポンプする）。
+  `vessel_statement()` がポンプする）。
 - リズム音（ADPCM-A）は当面 `2608_rhythm.zip` の WAV 6 点を前提とし、
   供給部を差し替え可能な分離点にする（`docs/MA2026-ANALYSIS.md` §5）。
   WAV 自体は権利確認までリポジトリに入れない。
