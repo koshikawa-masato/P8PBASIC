@@ -2,10 +2,12 @@
  *   Same in-memory machine model as the host HAL (halhost.c):
  *   text VRAM 80x25, graphics 640x400 in palette indices (2 pages),
  *   one flat 64 KiB memory shared with the Z80 vessel. Differences:
- *   keys arrive from the host application through a thread-safe
- *   queue, the clock is virtual (advanced by idling), and hal_term
+ *   keys arrive from the host application as the key matrix (the
+ *   HAL generates the characters from it, see keyscan) or through a
+ *   thread-safe queue, the clock is virtual (advanced by idling), and hal_term
  *   is the engine's exit hatch (see p8internal.h). */
 #include "basic.h"
+#include "hal.h"
 #include "vessel.h"
 #include "halp8.h"
 #include "p8internal.h"
@@ -22,6 +24,7 @@ static int hcur_x = 0, hcur_y = 0, hcur_vis = 0;
 static unsigned long tick = 0;
 static int brkflag = 0;
 static unsigned char kmatrix[16];
+static pthread_mutex_t km_mu = PTHREAD_MUTEX_INITIALIZER;
 static int inp_direct = 0;
 static unsigned char memory[65536];
 
@@ -63,13 +66,224 @@ static int kq_count(void)
     return n;
 }
 
-void halp8_set_matrix(int idx, unsigned char v) { kmatrix[idx & 15] = v; }
+/* Push only into an empty queue, atomically (the scanner's repeat
+ * uses this so a repeat can never land behind an unread key). */
+static int kq_push_if_empty(int code)
+{
+    int done = 0;
+    pthread_mutex_lock(&kq_mu);
+    if (kq_head == kq_tail) {
+        kq[kq_tail] = code;
+        kq_tail = (kq_tail + 1) % KQ_SIZE;
+        done = 1;
+    }
+    pthread_mutex_unlock(&kq_mu);
+    return done;
+}
+
+void halp8_set_matrix(int idx, unsigned char v)
+{
+    pthread_mutex_lock(&km_mu);
+    kmatrix[idx & 15] = v;
+    pthread_mutex_unlock(&km_mu);
+}
 void halp8_request_stop(void) { stop_req = 1; }
 int  halp8_stop_requested(void) { return stop_req; }
 
 static volatile int paused_flag = 0;
 void halp8_set_paused(int paused) { paused_flag = paused; }
 int  halp8_paused(void) { return paused_flag; }
+
+/* ---- keyboard character generation (the ROM's matrix scan) ----
+ * The host feeds only the key matrix. On the genuine machine the ROM
+ * scans that matrix and turns press edges into characters, with
+ * auto-repeat; keyscan() is that scanner. It reads kmatrix, never
+ * writes it, and pushes the generated codes into the key queue the
+ * interpreter reads (INKEY$, INPUT, the line editor). It runs on the
+ * interpreter thread only (hal_poll / hal_idle / hal_getkey).
+ * Matrix layout: QUASI88's published keyport table. Modelled, not
+ * genuine (docs/APPROXIMATIONS.md item 32):
+ *  - GRPH held: no character is generated at all (the GRPH glyph
+ *    layer is not modelled; the matrix bit itself is untouched).
+ *  - CAPS / KANA are mechanical locks on the genuine machine: the
+ *    matrix bit stays down for the whole lock, and the host app does
+ *    the same (its on-screen keyboard latches the cell). The scanner
+ *    reads their level from the snapshot, like SHIFT / CTRL.
+ *  - CTRL + letter = code 1..26, CTRL+C = break only; CTRL with the
+ *    other main-block keys (digits, punctuation) generates nothing.
+ *  - Repeat: 500 ms delay, then every 55 ms, the originally generated
+ *    code. A repeat is held back while the queue still has unread
+ *    keys, so a program that does not read the keyboard cannot bank
+ *    up seconds of repeats. */
+#define KS_ROWS            12
+#define KS_REPEAT_DELAY_MS 500
+#define KS_REPEAT_RATE_MS  55
+#define KS_NONE  (-1)   /* character key, nothing generated: ends a repeat */
+#define KS_INERT (-2)   /* modifier / lock / STOP / unused cell: repeat untouched */
+
+/* Zero ("everything was already down") is a safe power-on value: it
+ * yields no press edge on the first scan. */
+static unsigned char ks_prev[KS_ROWS];
+static int ks_caps = 0, ks_kana = 0;
+static int ks_rep_row = -1, ks_rep_bit = 0, ks_rep_code = 0;
+static long long ks_rep_due = 0;
+
+/* halfwidth katakana (JIS X 0201) per the JIS key legends */
+static const unsigned char ks_kana_letter[26] = {
+    0xC1, 0xBA, 0xBF, 0xBC, 0xB2, 0xCA, 0xB7, 0xB8, 0xC6,   /* A-I */
+    0xCF, 0xC9, 0xD8, 0xD3, 0xD0, 0xD7, 0xBE, 0xC0, 0xBD,   /* J-R */
+    0xC4, 0xB6, 0xC5, 0xCB, 0xC3, 0xBB, 0xDD, 0xC2          /* S-Z */
+};
+static const unsigned char ks_kana_digit[10] = {
+    0xDC, 0xC7, 0xCC, 0xB1, 0xB3, 0xB4, 0xB5, 0xD4, 0xD5, 0xD6
+};
+static const unsigned char ks_kana_small[10] = {    /* SHIFT; 0 = no small form */
+    0, 0, 0, 0xA7, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE
+};
+static const unsigned char ks_digit_shift[10] = {   /* 0 = none */
+    0, '!', '"', '#', '$', '%', '&', '\'', '(', ')'
+};
+/* punctuation: @ [ YEN ] ^ - (rows 2 and 5), : ; , . / _ (row 7) */
+static const unsigned char ks_punct_tab[12][3] = {  /* base, shift, kana; 0 = none */
+    { '@', '`', 0xDE }, { '[', '{', 0xDF }, { 0x5C, '|', 0xB0 },
+    { ']', '}', 0xD1 }, { '^', '~', 0xCD }, { '-', '=', 0xCE },
+    { ':', '*', 0xB9 }, { ';', '+', 0xDA }, { ',', '<', 0xC8 },
+    { '.', '>', 0xD9 }, { '/', '?', 0xD2 }, { 0,   '_', 0xDB }
+};
+
+static long long ks_now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static int ks_punct(int i, int shift, int ctrl)
+{
+    int c;
+    if (ctrl) return KS_NONE;
+    c = ks_punct_tab[i][ks_kana ? 2 : (shift ? 1 : 0)];
+    return c ? c : KS_NONE;
+}
+
+static int ks_digit(int d, int shift, int ctrl)
+{
+    if (ctrl) return KS_NONE;
+    if (ks_kana)
+        return (shift && ks_kana_small[d]) ? ks_kana_small[d] : ks_kana_digit[d];
+    if (!shift) return '0' + d;
+    return ks_digit_shift[d] ? ks_digit_shift[d] : KS_NONE;
+}
+
+/* The code one newly pressed cell generates, with the modifiers read
+ * live from the current matrix. Locks and STOP take effect here. */
+static int ks_keycode(int row, int bit, const unsigned char *cur)
+{
+    int shift = !(cur[8] & 0x40), ctrl = !(cur[8] & 0x80);
+    int n;
+    switch (row) {
+    case 0:                             /* keypad 0-7: SHIFT-independent */
+        return '0' + bit;
+    case 1:                             /* keypad 8 9 * + = , . and RETURN */
+        return "89*+=,.\r"[bit];
+    case 2: case 3: case 4: case 5:     /* @ A-Z [ YEN ] ^ - */
+        n = (row - 2) * 8 + bit;
+        if (n >= 1 && n <= 26) {
+            if (ctrl) {
+                if (n == 3) { if (running) brkflag = 1; return KS_NONE; }    /* CTRL+C */
+                return n;
+            }
+            if (ks_kana) return ks_kana_letter[n - 1];
+            /* SHIFT gives lowercase; CAPS inverts that sense */
+            return (shift != ks_caps) ? 'a' + n - 1 : 'A' + n - 1;
+        }
+        return ks_punct(n == 0 ? 0 : n - 26, shift, ctrl);
+    case 6:                             /* 0-7 */
+        return ks_digit(bit, shift, ctrl);
+    case 7:                             /* 8 9 : ; , . / _ */
+        if (bit < 2) return ks_digit(8 + bit, shift, ctrl);
+        return ks_punct(4 + bit, shift, ctrl);
+    case 8:
+        switch (bit) {
+        case 0: return shift ? KC_SHOME : 0x0B;     /* HOME / CLR */
+        case 1: return 0x1E;                        /* up */
+        case 2: return 0x1C;                        /* right */
+        case 3: return shift ? 0x12 : 0x7F;         /* INS / DEL */
+        case 5: return KS_INERT;    /* KANA lock: a level, read in keyscan */
+        default: return KS_INERT;                   /* GRPH, SHIFT, CTRL */
+        }
+    case 9:
+        switch (bit) {
+        case 0: if (running) brkflag = 1; return KS_INERT;       /* STOP */
+        case 6: return ' ';
+        case 7: return 0x1B;
+        default: return (shift ? KC_SF1 : KC_F1) + bit - 1;     /* F1-F5 */
+        }
+    case 10:
+        switch (bit) {
+        case 0: return 0x09;                        /* TAB */
+        case 1: return 0x1F;                        /* down */
+        case 2: return 0x1D;                        /* left */
+        case 3: return KC_HELP;
+        case 4: return KC_COPY;
+        case 5: return '-';                         /* keypad - */
+        case 6: return '/';                         /* keypad / */
+        default: return KS_INERT;   /* CAPS lock: a level, read in keyscan */
+        }
+    case 11:
+        if (bit == 0) return KC_ROLLUP;
+        if (bit == 1) return KC_ROLLDN;
+        return KS_INERT;
+    }
+    return KS_INERT;
+}
+
+static void keyscan(void)
+{
+    unsigned char cur[KS_ROWS];
+    int row, bit;
+    pthread_mutex_lock(&km_mu);
+    for (row = 0; row < KS_ROWS; row++) cur[row] = kmatrix[row];
+    pthread_mutex_unlock(&km_mu);
+    if (memcmp(cur, ks_prev, KS_ROWS) != 0) {
+        int grph = !(cur[8] & 0x10);
+        /* The locking keys are levels, not edges (see the header
+         * note): refresh them from every changed snapshot before
+         * translating its press edges. */
+        ks_kana = !(cur[8] & 0x20);
+        ks_caps = !(cur[10] & 0x80);
+        for (row = 0; row < KS_ROWS; row++) {
+            int edge = ks_prev[row] & ~cur[row] & 0xFF;     /* 1 -> 0 = pressed */
+            if (!edge) continue;
+            for (bit = 0; bit < 8; bit++) {
+                int code;
+                if (!(edge & (1 << bit))) continue;
+                code = ks_keycode(row, bit, cur);
+                if (code == KS_INERT) continue;
+                if (code >= 0 && grph) code = KS_NONE;
+                if (code >= 0) {
+                    halp8_push_key(code);
+                    ks_rep_row = row; ks_rep_bit = bit; ks_rep_code = code;
+                    ks_rep_due = ks_now_ms() + KS_REPEAT_DELAY_MS;
+                } else {
+                    ks_rep_row = -1;    /* a new key ends the old repeat */
+                }
+            }
+        }
+        memcpy(ks_prev, cur, KS_ROWS);
+    }
+    if (ks_rep_row >= 0) {
+        if (!(cur[8] & 0x10)) {
+            ks_rep_row = -1;    /* GRPH held: generation is suppressed */
+        } else if (cur[ks_rep_row] & (1 << ks_rep_bit)) {
+            ks_rep_row = -1;            /* released */
+        } else {
+            long long now = ks_now_ms();
+            if (now >= ks_rep_due && kq_push_if_empty(ks_rep_code))
+                ks_rep_due = now + KS_REPEAT_RATE_MS;
+        }
+    }
+}
 
 static int gon_flag = 1, ton_flag = 1;
 static int gfx200 = 0;
@@ -105,6 +319,10 @@ void halp8_session_reset(void)
     brkflag = 0;
     inp_direct = 0;
     memset(kmatrix, 0xFF, sizeof(kmatrix));   /* idle = nothing pressed */
+    memcpy(ks_prev, kmatrix, sizeof(ks_prev));  /* scanner: no edges pending */
+    ks_caps = ks_kana = 0;
+    ks_rep_row = -1; ks_rep_bit = 0; ks_rep_code = 0;
+    ks_rep_due = 0;
     poll_n = 0;
 }
 
@@ -147,13 +365,21 @@ void hal_width40(int on) { w40 = on; }
 int hal_getkey(void)
 {
     if (stop_req) p8_bail();
+    keyscan();
     return kq_pop();
 }
 
 int hal_keyhit(void) { return kq_count() > 0; }
 int hal_breakflag(void) { int b = brkflag; brkflag = 0; return b; }
 unsigned char hal_lastscan(void) { return 0; }
-unsigned char hal_keymatrix(int i) { return kmatrix[i & 15]; }
+unsigned char hal_keymatrix(int i)
+{
+    unsigned char v;
+    pthread_mutex_lock(&km_mu);
+    v = kmatrix[i & 15];
+    pthread_mutex_unlock(&km_mu);
+    return v;
+}
 int hal_shiftstate(void) { return 0; }
 void hal_set_inp_direct(int on) { inp_direct = on; }
 int hal_inp_direct(void) { return inp_direct; }
@@ -166,6 +392,7 @@ void hal_idle(void)
     while (paused_flag && !stop_req) usleep(10000);
     if (stop_req) p8_bail();
     tick++;
+    keyscan();
     /* When the guest is waiting for input there is nothing to
      * compute; yield real time so the interpreter does not spin
      * a core flat out inside the host application. */
@@ -291,6 +518,7 @@ void hal_poll(void)
     if (stop_req) p8_bail();
     if (++poll_n < 64) return;
     poll_n = 0;
+    keyscan();          /* a running program still gets its keys scanned */
     /* Each statement advances ~0.5 ms of emulated time, so a fast
      * host produces seconds of audio per check interval; sleep off
      * the whole lead (in stop-responsive chunks), not a fixed cap. */
