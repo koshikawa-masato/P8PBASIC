@@ -12,6 +12,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <algorithm>
+#include <string>
 #include <vector>
 #include "ymfm.h"
 #include "ymfm_opn.h"
@@ -247,6 +249,214 @@ void render_pending(void)
     if (frames > 0) render_frames(frames);
 }
 
+/* ---- external rhythm sample supply (WAV -> ADPCM-A) ---- */
+
+const size_t RHYTHM_REGION_END = 0x2000;        /* BD..RIM, see ym2608 reset */
+const size_t WAV_MAX_BYTES = 64u * 1024 * 1024;
+/* ymfm's ym2608 clocks ADPCM-A channels 4 and 5 (TOM, RIM) every
+ * second envelope clock, i.e. at half the rate of channels 0-3. */
+const double ADPCM_A_RATE = 7987200.0 / 432.0;
+const double ADPCM_A_RATE_HALF = 7987200.0 / 864.0;
+
+struct RhythmSlot {
+    uint32_t start, end;        /* ADPCM-A memory bytes, end inclusive */
+    double rate;                /* playback rate of the slot's channel */
+    const char *names[5];
+};
+const RhythmSlot rhythm_slots[6] = {
+    { 0x0000, 0x01BF, ADPCM_A_RATE, { "2608_BD.wav", "2608_BD.WAV", "2608_bd.wav", nullptr } },
+    { 0x01C0, 0x043F, ADPCM_A_RATE, { "2608_SD.wav", "2608_SD.WAV", "2608_sd.wav", nullptr } },
+    { 0x0440, 0x1B7F, ADPCM_A_RATE, { "2608_TOP.wav", "2608_TOP.WAV", "2608_top.wav", nullptr } },
+    { 0x1B80, 0x1CFF, ADPCM_A_RATE, { "2608_HH.wav", "2608_HH.WAV", "2608_hh.wav", nullptr } },
+    { 0x1D00, 0x1F7F, ADPCM_A_RATE_HALF, { "2608_TOM.wav", "2608_TOM.WAV", "2608_tom.wav", nullptr } },
+    { 0x1F80, 0x1FFF, ADPCM_A_RATE_HALF, { "2608_RIM.wav", "2608_RIM.WAV", "2608_rim.wav", nullptr } },
+};
+
+uint32_t rd16(const uint8_t *p) { return p[0] | (uint32_t)p[1] << 8; }
+uint32_t rd32(const uint8_t *p)
+{
+    return p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+bool read_file(FILE *f, std::vector<uint8_t> &buf)
+{
+    static uint8_t tmp[65536];
+    size_t n;
+    buf.clear();
+    while ((n = fread(tmp, 1, sizeof(tmp), f)) > 0) {
+        if (buf.size() + n > WAV_MAX_BYTES) return false;
+        buf.insert(buf.end(), tmp, tmp + n);
+    }
+    return !ferror(f);
+}
+
+/* RIFF/WAVE: PCM 8-bit unsigned / 16-bit signed, IEEE float 32-bit;
+ * mono or stereo (averaged). Decodes no more input frames than
+ * `out_samples` samples at `out_rate` can use. */
+bool wav_decode(const std::vector<uint8_t> &buf, size_t out_samples,
+                double out_rate, std::vector<float> &mono, uint32_t &rate)
+{
+    /* KSDATAFORMAT_SUBTYPE_PCM / _IEEE_FLOAT after the format tag */
+    static const uint8_t guid_tail[14] = {
+        0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
+        0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71
+    };
+    const uint8_t *d = buf.data();
+    size_t size = buf.size();
+    if (size < 12 || memcmp(d, "RIFF", 4) || memcmp(d + 8, "WAVE", 4)) return false;
+    /* chunks must lie inside both the declared RIFF extent and the file */
+    uint64_t extent = (uint64_t)rd32(d + 4) + 8;
+    size_t limit = extent < size ? (size_t)extent : size;
+    uint32_t fmt = 0, ch = 0, bits = 0, align = 0;
+    const uint8_t *data = nullptr;
+    size_t data_len = 0;
+    rate = 0;
+    size_t pos = 12;
+    while (pos < limit && limit - pos >= 8) {
+        size_t clen = rd32(d + pos + 4);
+        const uint8_t *body = d + pos + 8;
+        if (clen > limit - pos - 8) return false;
+        if (!memcmp(d + pos, "fmt ", 4)) {
+            if (clen < 16) return false;
+            fmt = rd16(body);
+            ch = rd16(body + 2);
+            rate = rd32(body + 4);
+            align = rd16(body + 12);
+            bits = rd16(body + 14);
+            if (fmt == 0xFFFE) {                /* WAVE_FORMAT_EXTENSIBLE */
+                if (clen < 40 || rd16(body + 16) < 22) return false;
+                fmt = rd16(body + 24);
+                if (fmt != 1 && fmt != 3) return false;
+                if (memcmp(body + 26, guid_tail, sizeof(guid_tail))) return false;
+            }
+        } else if (!memcmp(d + pos, "data", 4)) {
+            data = body;
+            data_len = clen;
+            break;
+        }
+        pos += 8 + clen + (clen & 1);
+    }
+    if (!data || !fmt) return false;
+    if (ch != 1 && ch != 2) return false;
+    if (rate < 1 || rate > 768000) return false;
+    if (!((fmt == 1 && (bits == 8 || bits == 16)) || (fmt == 3 && bits == 32)))
+        return false;
+    uint32_t bytes = bits / 8;
+    if (align < bytes * ch) align = bytes * ch;
+    if (data_len % align) return false;
+    size_t frames = data_len / align;
+    size_t max_frames = (size_t)((double)out_samples * rate / out_rate) + 2;
+    if (frames > max_frames) frames = max_frames;
+    if (frames == 0) return false;
+    mono.resize(frames);
+    for (size_t i = 0; i < frames; i++) {
+        double acc = 0;
+        for (uint32_t c = 0; c < ch; c++) {
+            const uint8_t *p = data + i * align + c * bytes;
+            double v;
+            if (fmt == 3) {
+                uint32_t u = rd32(p);
+                float fv;
+                memcpy(&fv, &u, 4);
+                v = fv;
+                if (v != v) v = 0.0;            /* NaN */
+                if (v < -1.0) v = -1.0;
+                if (v > 1.0) v = 1.0;
+            } else if (bits == 8) {
+                v = ((int)p[0] - 128) / 128.0;
+            } else {
+                v = (int16_t)rd16(p) / 32768.0;
+            }
+            acc += v;
+        }
+        mono[i] = (float)(acc / ch);
+    }
+    return true;
+}
+
+/* Resample (linear, endpoint-clamped) to `out_rate` and encode
+ * greedily against the decoder recurrence of ymfm's
+ * adpcm_a_channel::clock(); high nibble first. The chip plays the
+ * whole slot and a zero nibble is not silence (it adds step/8), so
+ * past the sample's end the encoder keeps tracking a zero target
+ * until all `cap` bytes of `out` are written. Returns false, with
+ * `out` untouched, when there is nothing to encode. */
+bool adpcm_a_encode(const std::vector<float> &in, double in_rate,
+                    double out_rate, uint8_t *out, size_t cap)
+{
+    static const uint16_t s_steps[49] = {
+         16,  17,   19,   21,   23,   25,   28,
+         31,  34,   37,   41,   45,   50,   55,
+         60,  66,   73,   80,   88,   97,  107,
+        118, 130,  143,  157,  173,  190,  209,
+        230, 253,  279,  307,  337,  371,  408,
+        449, 494,  544,  598,  658,  724,  796,
+        876, 963, 1060, 1166, 1282, 1411, 1552
+    };
+    static const int8_t s_step_inc[8] = { -1, -1, -1, -1, 2, 5, 7, 9 };
+    if (in.empty() || in_rate <= 0 || out_rate <= 0 || cap == 0) return false;
+    double total = (double)in.size() * out_rate / in_rate;
+    size_t count = total >= (double)(cap * 2) ? cap * 2 : (size_t)total;
+    if (count == 0) count = 1;  /* a nonempty input yields a sample */
+    int acc = 0, step = 0;      /* decoder state at key-on */
+    size_t bytes = 0;
+    for (size_t i = 0; i < cap * 2; i++) {
+        long target = 0;        /* past the sample: silence */
+        if (i < count) {
+            double pos = (double)i * in_rate / out_rate;
+            size_t i0 = (size_t)pos;
+            if (i0 >= in.size()) i0 = in.size() - 1;
+            size_t i1 = i0 + 1 < in.size() ? i0 + 1 : i0;
+            double frac = pos - (double)i0;
+            if (frac < 0) frac = 0;
+            if (frac > 1) frac = 1;
+            double s = in[i0] + (in[i1] - in[i0]) * frac;
+            target = (long)(s * 2047.0);
+            if (target > 2047) target = 2047;
+            if (target < -2048) target = -2048;
+        }
+
+        int best_n = 0, best_acc = acc;
+        long best_err = -1;
+        for (int n = 0; n < 16; n++) {
+            int delta = (2 * (n & 7) + 1) * s_steps[step] / 8;
+            if (n & 8) delta = -delta;
+            int a = (acc + delta) & 0xFFF;
+            long sv = (a & 0x800) ? a - 0x1000 : a;
+            long err = sv > target ? sv - target : target - sv;
+            if (best_err < 0 || err < best_err) {
+                best_err = err; best_n = n; best_acc = a;
+            }
+        }
+        acc = best_acc;
+        step += s_step_inc[best_n & 7];
+        if (step < 0) step = 0;
+        if (step > 48) step = 48;
+
+        if ((i & 1) == 0) {
+            out[bytes] = (uint8_t)(best_n << 4);
+        } else {
+            out[bytes] |= (uint8_t)best_n;
+            bytes++;
+        }
+    }
+    return true;
+}
+
+bool rhythm_load_file(FILE *f, const RhythmSlot &slot)
+{
+    size_t cap = slot.end - slot.start + 1;
+    std::vector<uint8_t> buf;
+    std::vector<float> mono;
+    std::vector<uint8_t> enc(cap, 0);
+    uint32_t rate = 0;
+    if (!read_file(f, buf)) return false;
+    if (!wav_decode(buf, cap * 2, slot.rate, mono, rate)) return false;
+    if (!adpcm_a_encode(mono, (double)rate, slot.rate, enc.data(), cap)) return false;
+    memcpy(&iface.adpcm_a_ram[slot.start], enc.data(), cap);
+    return true;
+}
+
 } // namespace
 
 extern "C" void opna_adpcm_b_write(unsigned long addr, int value)
@@ -274,6 +484,40 @@ extern "C" void opna_adpcm_a_write(unsigned long addr, int value)
 extern "C" int opna_adpcm_a_read(unsigned long addr)
 {
     return addr < iface.adpcm_a_ram.size() ? iface.adpcm_a_ram[(size_t)addr] : 0;
+}
+
+extern "C" void opna_clear_rhythm(void)
+{
+    auto first = iface.adpcm_a_ram.begin();
+    auto last = first + RHYTHM_REGION_END;
+    if (std::all_of(first, last, [](uint8_t b) { return b == 0; }))
+        return;                 /* nothing to change, nothing to flush */
+    render_pending();           /* earlier frames read the old contents */
+    std::fill(first, last, 0);
+}
+
+/* External rhythm sample supply: encode <dir>/<instrument>.wav into
+ * the fixed rhythm layout. Returns the number of instruments loaded. */
+extern "C" int opna_load_rhythm_dir(const char *dir)
+{
+    int loaded = 0;
+    opna_clear_rhythm();
+    if (!dir || !*dir) return 0;
+    render_pending();           /* earlier frames read the old contents */
+    for (const RhythmSlot &slot : rhythm_slots) {
+        FILE *f = nullptr;
+        try {
+            for (int i = 0; slot.names[i] && !f; i++) {
+                std::string path = std::string(dir) + "/" + slot.names[i];
+                f = fopen(path.c_str(), "rb");
+            }
+            if (f && rhythm_load_file(f, slot)) loaded++;
+        } catch (...) {
+            /* allocation failure: this instrument stays zero */
+        }
+        if (f) fclose(f);
+    }
+    return loaded;
 }
 
 extern "C" void opna_set_sink(opna_sink_fn fn, void *ctx)

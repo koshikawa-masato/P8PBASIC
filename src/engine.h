@@ -33,6 +33,10 @@ void      p8_start(P8Engine *e);
  * while the display rate, music tempo and pitch, and disk timing stay
  * the same (docs/APPROXIMATIONS.md item 33). */
 void      p8_set_cpu_clock(P8Engine *e, long hz);
+/* External rhythm sample supply for the next session: a directory
+ * of WAV files (see opna_load_rhythm_dir in opna.h). NULL clears it.
+ * Takes effect at p8_start. */
+void      p8_set_rhythm_dir(P8Engine *e, const char *dir);
 void      p8_stop(P8Engine *e);          /* blocks until stopped */
 int       p8_running(P8Engine *e);
 

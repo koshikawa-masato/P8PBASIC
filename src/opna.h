@@ -42,6 +42,13 @@ int  opna_adpcm_b_read(unsigned long addr);
  * channels read zeros). */
 void opna_adpcm_a_write(unsigned long addr, int value);
 int  opna_adpcm_a_read(unsigned long addr);
+/* External rhythm sample supply. opna_load_rhythm_dir() clears the
+ * rhythm region (ADPCM-A 0000H-1FFFH), then encodes the WAV files
+ * found in `dir` (bd, sd, cym/top, hh, tom, rim + ".wav") into the
+ * chip's fixed rhythm layout; returns the number of instruments
+ * loaded (0-6). opna_clear_rhythm() zeroes the region. */
+int  opna_load_rhythm_dir(const char *dir);
+void opna_clear_rhythm(void);
 
 /* Embedded use: receive rendered stereo frames (interleaved s16) as
  * they are produced; passing NULL removes the sink. Rendering runs

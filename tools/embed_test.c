@@ -143,6 +143,9 @@ int main(int argc, char **argv)
     { const char *pc = getenv("P8P_CLOCK");
       if (pc && !strcmp(pc, "8000000")) p8_set_cpu_clock(e, 8000000L);
       else if (pc && !strcmp(pc, "4000000")) p8_set_cpu_clock(e, 4000000L); }
+    /* P8P_RHYTHM_DIR=<dir>: external rhythm sample supply. */
+    { const char *rd = getenv("P8P_RHYTHM_DIR");
+      if (rd) p8_set_rhythm_dir(e, rd); }
     if (p8_boot(e) != 0) { fprintf(stderr, "boot failed\n"); return 1; }
     p8_start(e);
     /* feed the key script in real time, draining audio as we go */

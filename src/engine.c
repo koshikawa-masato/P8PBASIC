@@ -41,6 +41,7 @@ struct P8Engine {
     unsigned long rendered;         /* all frames the sink ever saw */
     struct timespec t0;             /* p8_start wall clock (under ring_mu) */
     long cpu_clock;                 /* 4000000 or 8000000 Hz, applied at p8_start */
+    char *rhythm_dir;               /* external rhythm samples, applied at p8_start */
     pthread_mutex_t ring_mu;        /* guards the ring and t0 */
 };
 
@@ -130,6 +131,7 @@ void p8_destroy(P8Engine *e)
     opna_set_sink(0, 0);
     free(e->d88_path);
     free(e->workdir);
+    free(e->rhythm_dir);
     free(e);
 }
 
@@ -181,17 +183,32 @@ void p8_set_cpu_clock(P8Engine *e, long hz)
     if (hz == 4000000L || hz == 8000000L) e->cpu_clock = hz;
 }
 
+void p8_set_rhythm_dir(P8Engine *e, const char *dir)
+{
+    if (!e) return;
+    free(e->rhythm_dir);
+    e->rhythm_dir = dir ? strdup(dir) : 0;
+}
+
 void p8_start(P8Engine *e)
 {
     if (e->started) return;
     e->running = 1;
     e->started = 1;
+    /* Session boundary: no decoder state or rendered audio of an
+     * earlier session of this engine carries over. Before the clock
+     * and the rhythm load, which it would otherwise undo. */
+    opna_reset();
     /* The CPU clock is a per-session setting: apply it before the
      * resets below so they initialise clock-scaled state, and
      * unconditionally so a 4 MHz session after an 8 MHz one in the
      * same process does not inherit the faster clock. */
     vessel_set_clock_mult(e->cpu_clock == 8000000L ? 2 : 1);
     opna_set_cpu_clock(e->cpu_clock);
+    /* Likewise per session: a session without a rhythm dir never
+     * plays an earlier session's samples. */
+    if (e->rhythm_dir) opna_load_rhythm_dir(e->rhythm_dir);
+    else opna_clear_rhythm();
     /* A process may boot several engines in turn: put the HAL and
      * the vessel back to power-on state. Order matters - the
      * vessel's setup pokes its stubs into the guest RAM that
