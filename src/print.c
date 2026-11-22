@@ -1,5 +1,6 @@
 /* print.c - PRINT / PRINT USING */
 #include "basic.h"
+#include "vessel.h"
 #include <ctype.h>
 #include <math.h>
 
@@ -7,6 +8,13 @@ FILE *out_fp = 0;
 int out_col = 0;
 
 #define LPT ((FILE *)-1)
+
+/* The ROM's text output work per character put on the screen, beyond
+ * the flat statement cost; stmt_print charges it once per statement.
+ * Calibrated together with INP and LINE (docs/APPROXIMATIONS.md
+ * item 35). */
+#define PRINT_CHAR_CYCLES 1500L
+static long con_chars = 0;      /* screen characters emitted (newlines included) */
 
 void out_char(int c)
 {
@@ -17,6 +25,7 @@ void out_char(int c)
         out_col++;
         return;
     }
+    con_chars++;
     con_putc(c & 0xFF);
 }
 
@@ -33,7 +42,7 @@ static void newline(void)
 {
     if (out_fp == LPT) return;
     if (out_fp) { fputs("\r\n", out_fp); out_col = 0; }
-    else con_newline();
+    else { con_chars++; con_newline(); }
 }
 
 /* ---------------- PRINT USING ---------------- */
@@ -198,7 +207,7 @@ static void print_using(void)
     newline();
 }
 
-void stmt_print(FILE *fp)
+static void print_body(FILE *fp)
 {
     int need_nl = 1;
     out_fp = fp;
@@ -254,4 +263,14 @@ void stmt_print(FILE *fp)
     }
     if (need_nl) newline();
     out_fp = 0;
+}
+
+/* PRINT / PRINT# / LPRINT. Screen output is charged its modelled
+ * per-character work, once for the whole statement; file and printer
+ * output never count. */
+void stmt_print(FILE *fp)
+{
+    con_chars = 0;
+    print_body(fp);
+    if (con_chars) vessel_charge(con_chars * PRINT_CHAR_CYCLES);
 }

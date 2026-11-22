@@ -1,5 +1,6 @@
 /* eval.c - expression evaluation and built-in functions */
 #include "basic.h"
+#include "vessel.h"
 #include <ctype.h>
 #include <math.h>
 
@@ -514,7 +515,13 @@ static void func(u8 f, VAL *v)
         return; }
     case F_PEEK: { long ad; expect('('); ad = eval_long(); expect(')');
         v->type = T_INT; v->u.i = (i16)hal_peek(def_seg, (unsigned)ad); return; }
+    /* INP_CHARGE_CYCLES: the ROM's work per INP() evaluation (function
+     * dispatch, argument and result conversion) beyond the flat
+     * statement cost. Calibrated against the genuine machine's key
+     * polling rate (docs/APPROXIMATIONS.md item 35). */
+#define INP_CHARGE_CYCLES 12000L
     case F_INP: { long p; expect('('); p = eval_long(); expect(')');
+        vessel_charge(INP_CHARGE_CYCLES);
         v->type = T_INT; v->u.i = (i16)(hal_inp((unsigned)p) & 0xFF); return; }
     case F_FRE: paren_expr(&a);
         v->type = T_SNG; v->u.f = (float)prog_free(); return;

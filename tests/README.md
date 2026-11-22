@@ -79,7 +79,12 @@ the image itself.
 
   and review its diff like a baseline (`--bless` does not touch it).
   While the file is missing the suite prints a NOTE and does not
-  check the counters.
+  check the counters. `tests/select_hold_test.sh` (also runnable on
+  its own, about 45 s) enters MA2026's song select, holds cursor-down
+  for 300 ms and reads the cursor position from the guest text image:
+  it must rest on song 2 or 3, the genuine machine's 4-5 moves per
+  second (docs/APPROXIMATIONS.md item 35). It runs only when the test
+  disk is MA2026A.D88.
 
 The QUASI88 differential check lives outside this suite (it needs
 the user's own ROM dump and an X server); see docs/HOST-CLI.md and

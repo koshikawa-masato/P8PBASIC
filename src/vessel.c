@@ -1776,6 +1776,24 @@ void vessel_statement(void)
     pump_advance(STMT_CYCLES);
 }
 
+/* Modelled work of a builtin beyond the flat statement cost (INP's
+ * function dispatch, PRINT's per-character output, LINE's per-pixel
+ * fill; docs/APPROXIMATIONS.md item 35). Emulated time passing inside
+ * a single statement, as in vessel_burn's sector wait: advanced in
+ * slices of at most PUMP_SLICE, with the HAL's poll after each so a
+ * pacing host keeps its audio lead and a stop request lands (the
+ * poll may not return). The charge is WORK: not scaled by clk_mult
+ * (item 33). */
+void vessel_charge(long cycles)
+{
+    while (cycles > 0) {
+        long n = cycles < PUMP_SLICE ? cycles : PUMP_SLICE;
+        pump_advance(n);
+        hal_poll();
+        cycles -= n;
+    }
+}
+
 void vessel_exec(unsigned entry)
 {
     long n;

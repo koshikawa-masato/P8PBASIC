@@ -1,5 +1,6 @@
 /* graph.c - graphics statements */
 #include "basic.h"
+#include "vessel.h"
 #include <ctype.h>
 #include <math.h>
 
@@ -240,10 +241,27 @@ static void draw_line(int x1, int y1, int x2, int y2, int c, unsigned style)
     }
 }
 
+/* The ROM's work per LINE statement beyond the flat statement cost:
+ * setup plus a per-pixel cost over the drawn length (line), outline
+ * (B) or area (BF). Calibrated together with INP and PRINT
+ * (docs/APPROXIMATIONS.md item 35). */
+#define LINE_BASE_CYCLES  4000L
+#define LINE_PIXEL_CYCLES 300L
+
+/* Extent of [a,b] (either order) inside [lo,hi]; 0 when outside. */
+static long span_in(int a, int b, int lo, int hi)
+{
+    if (a > b) { int t = a; a = b; b = t; }
+    if (a < lo) a = lo;
+    if (b > hi) b = hi;
+    return a > b ? 0 : (long)b - a + 1;
+}
+
 void stmt_line(void)
 {
     int x1 = lastx, y1 = lasty, x2, y2, c = g_fg, box = 0;
     unsigned style = 0xFFFF;
+    long pixels;
     if (peekc() != '-') parse_coord(&x1, &y1);
     expect('-');
     {
@@ -277,6 +295,17 @@ done:
         for (y = ya; y <= yb; y++) hline_raw(x1, x2, y, c);
     }
     lastx = x2; lasty = y2;
+    /* Pixels the statement covers, clipped to the view like the
+     * drawing itself (so far-off coordinates cannot inflate the
+     * charge): the longer axis for a line, the four sides as drawn
+     * for B (corners twice), the area for BF. */
+    {
+        long w = span_in(x1, x2, vx1, vx2), h = span_in(y1, y2, vy1, vy2);
+        if (box == 0) pixels = w > h ? w : h;
+        else if (box == 1) pixels = 2 * (w + h);
+        else pixels = w * h;
+    }
+    vessel_charge(LINE_BASE_CYCLES + pixels * LINE_PIXEL_CYCLES);
 }
 
 /* ellipse with integer midpoint algorithm */

@@ -30,7 +30,8 @@ int  vessel_relay_target(unsigned vector, const char *name, unsigned *target); /
 void vessel_prime_arg(long v);  /* plant the first-arg descriptor (EC41/EC44) as the ROM dispatcher would */
 unsigned long vessel_frame_count(void);   /* VRTC period wraps since session reset (the guest frame clock) */
 void vessel_pump(void);                            /* advance emulated time by one full pump slice + deliver due interrupts (bulk waits inside one statement) */
-void vessel_statement(void);                       /* advance emulated time by one BASIC statement's modelled cost + deliver due interrupts (exec_loop, once per pass) */
+void vessel_charge(long cycles);                   /* advance emulated time by a builtin's modelled work (INP / PRINT / LINE; work, not scaled by the clock multiplier) + deliver due interrupts, polling the HAL once per slice */
+void vessel_statement(void);                      /* advance emulated time by one BASIC statement's modelled cost + deliver due interrupts (exec_loop, once per pass) */
 unsigned long vessel_opn_keyons(void);             /* OPNA key on/off write count (diagnostics) */
 unsigned long vessel_opn_writes(void);             /* OPNA bank-0 write total (diagnostics) */
 unsigned long vessel_opn_writes1(void);            /* OPNA bank-1 write total (diagnostics) */

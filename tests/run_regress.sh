@@ -333,6 +333,16 @@ sed -n '/----- ATTRS (merged) -----/,$p' "$WORK/embedsel.log" \
   | grep -q 'a0a0' || bad "embedsel: no pair-driven recoloring in merged attrs"
 [ $FAIL -eq 0 ] && echo "embed text ok"
 
+# *SELECT cursor rate under a held key: INP / PRINT / LINE charge
+# their modelled work, so the INP-polling loop iterates at the
+# genuine rate (docs/APPROXIMATIONS.md item 35). The assertion reads
+# MA2026's own cursor layout, so it runs for that disk only.
+note "embed: select hold rate (45 s run)"
+case "$DISK" in
+  */MA2026A.D88) sh tests/select_hold_test.sh || bad "select_hold" ;;
+  *) echo "select hold skipped: the test disk is not MA2026A.D88" ;;
+esac
+
 # In-process restart: the app creates a fresh engine per game launch
 # in one process, so a second create/boot/start after stop/destroy
 # must behave like the first (docs/APPROXIMATIONS.md item 22). Both
