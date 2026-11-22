@@ -1783,9 +1783,17 @@ void vessel_statement(void)
  * slices of at most PUMP_SLICE, with the HAL's poll after each so a
  * pacing host keeps its audio lead and a stop request lands (the
  * poll may not return). The charge is WORK: not scaled by clk_mult
- * (item 33). */
+ * (item 33). While machine code runs (in_run) the slices still poll
+ * although pump_advance advances nothing. */
 void vessel_charge(long cycles)
 {
+    /* Not live yet (pump_advance's first condition): no time can
+     * pass, so one poll for the whole charge - not one per slice,
+     * thousands for a large fill - keeps a stop request landing. */
+    if (!pump_live) {
+        if (cycles > 0) hal_poll();
+        return;
+    }
     while (cycles > 0) {
         long n = cycles < PUMP_SLICE ? cycles : PUMP_SLICE;
         pump_advance(n);

@@ -8,6 +8,7 @@ void fn_clear(void);
 void stmt_deffn(void);
 void rnd_randomize(long n);
 void rnd_reset(void);
+void eval_reset_fn_depth(void);
 void option_base_set(int b);
 void *array_base(const char *name, int type, long *bytes);
 void print_using_dummy(void);
@@ -2094,5 +2095,6 @@ void interp_init(void)
     prog_mem[0] = prog_mem[1] = 0;
     p8_mem_top = 0;             /* CLEAR ,m not given yet */
     rnd_reset();
+    eval_reset_fn_depth();      /* a bail inside a DEF FN body leaves it raised */
     def_seg = hal_dataseg();
 }

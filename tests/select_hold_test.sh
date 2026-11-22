@@ -29,18 +29,22 @@ trap 'rm -rf "$WORK"' EXIT
 # 40 s of attract, RETURN (enter *SELECT), 2 s to settle, cursor-down
 # held 300 ms by the harness, 1 s for the last move to be drawn.
 KEYS=$(printf '\\w%.0s' $(seq 40))
-touch "$WORK/marker"
-(cd "$WORK" && P8P_DUMPFULL=1 "$BIN" "$DISK" 1 \
+# P8P_DUMP_DIR: the harness writes full.bin into this run's own work
+# dir (by default it lands in the session's scratch dir, where another
+# run's dump could be mistaken for ours).
+(cd "$WORK" && P8P_DUMPFULL=1 P8P_DUMP_DIR="$WORK" "$BIN" "$DISK" 1 \
    "${KEYS}\\E\\w\\w\\D\\w" > embed.log 2>&1)
-# The harness writes full.bin into its own scratch dir (/tmp/p8pXXXXXX),
-# not the working directory; take the dump this run produced.
-DUMP=$(find /tmp -maxdepth 2 -name full.bin -newer "$WORK/marker" 2>/dev/null | head -1)
-if [ -z "$DUMP" ] || [ ! -f "$DUMP" ]; then
+RC=$?
+if [ "$RC" -ne 0 ]; then
+  echo "FAIL: select_hold: harness exited with status $RC"
+  tail -5 "$WORK/embed.log"
+  exit 1
+fi
+if [ ! -f "$WORK/full.bin" ]; then
   echo "FAIL: select_hold: no memory dump produced"
   tail -5 "$WORK/embed.log"
   exit 1
 fi
-cp "$DUMP" "$WORK/full.bin"
 
 # The song cursor is the byte 0xC6 in the guest text image (base
 # 0xF418, 120 bytes per row). menu.BAS places it at column XT*6+3 of

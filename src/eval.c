@@ -268,6 +268,14 @@ void stmt_deffn(void)
     f->next = fnlist; fnlist = f;
 }
 
+/* DEF FN nesting depth. File scope, not a local of call_fn: a
+ * p8_bail longjmp out of a function body (an INP() charge polling
+ * inside it) skips call_fn's decrement, and the count must not reach
+ * the next session of the process (interp_init resets it). */
+static int fn_depth = 0;
+
+void eval_reset_fn_depth(void) { fn_depth = 0; }
+
 static void call_fn(VAL *res)
 {
     char name[41]; int type, i;
@@ -275,7 +283,6 @@ static void call_fn(VAL *res)
     VAL args[8], saved[8];
     void *vp[8];
     u8 *save_ptr;
-    static int depth = 0;
     PEEKC();
     parse_varname(name, &type);
     for (f = fnlist; f; f = f->next)
@@ -290,7 +297,7 @@ static void call_fn(VAL *res)
         }
         expect(')');
     }
-    if (++depth > 20) { depth = 0; berror(E_OUT_OF_MEM); }
+    if (++fn_depth > 20) { fn_depth = 0; berror(E_OUT_OF_MEM); }
     for (i = 0; i < f->nparam; i++) {
         u8 tmp[48]; u8 *sp = txtptr;
         int t;
@@ -313,7 +320,7 @@ static void call_fn(VAL *res)
     eval(res);
     txtptr = save_ptr;
     for (i = 0; i < f->nparam; i++) var_set(vp[i], f->ptype[i], &saved[i]);
-    depth--;
+    fn_depth--;
     if (f->type == T_STR) need_str(res);
     else { need_num(res); val_conv(res, f->type); }
 }

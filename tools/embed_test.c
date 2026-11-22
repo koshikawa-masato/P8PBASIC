@@ -209,12 +209,20 @@ int main(int argc, char **argv)
         }
     }
     if (getenv("P8P_DUMPFULL")) {
-        FILE *f = fopen("full.bin", "wb");
+        /* Default: the session's scratch dir (p8_boot chdirs there).
+         * P8P_DUMP_DIR names a directory of the caller's instead, so
+         * a test reads the dump of its own run and no other. */
+        const char *dd = getenv("P8P_DUMP_DIR");
+        char path[1024];
+        FILE *f;
         int i;
+        if (dd && *dd) snprintf(path, sizeof(path), "%s/full.bin", dd);
+        else snprintf(path, sizeof(path), "full.bin");
+        f = fopen(path, "wb");
         if (f) {
             for (i = 0; i < 0x10000; i++) { int b = hal_peek(0, i); fputc(b, f); }
             fclose(f);
-        } else fprintf(stderr, "P8P_DUMPFULL: cannot open full.bin\n");
+        } else fprintf(stderr, "P8P_DUMPFULL: cannot open %s\n", path);
     }
     if (getenv("P8P_DUMPDB")) {
         FILE *f = fopen("db.bin", "wb");

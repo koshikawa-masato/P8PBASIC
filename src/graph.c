@@ -257,6 +257,22 @@ static long span_in(int a, int b, int lo, int hi)
     return a > b ? 0 : (long)b - a + 1;
 }
 
+/* Does the segment (x1,y1)-(x2,y2) touch the view rectangle? Exact
+ * (separating axes: the two box axes, then the line's normal). */
+static int seg_in_view(int x1, int y1, int x2, int y2)
+{
+    long long dx = (long long)x2 - x1, dy = (long long)y2 - y1, s;
+    int neg = 0, pos = 0, i;
+    if ((x1 < vx1 && x2 < vx1) || (x1 > vx2 && x2 > vx2)) return 0;
+    if ((y1 < vy1 && y2 < vy1) || (y1 > vy2 && y2 > vy2)) return 0;
+    for (i = 0; i < 4; i++) {
+        s = dx * ((i & 2 ? vy2 : vy1) - (long long)y1)
+          - dy * ((i & 1 ? vx2 : vx1) - (long long)x1);
+        if (s < 0) neg = 1; else if (s > 0) pos = 1; else return 1;
+    }
+    return neg && pos;
+}
+
 void stmt_line(void)
 {
     int x1 = lastx, y1 = lasty, x2, y2, c = g_fg, box = 0;
@@ -298,11 +314,19 @@ done:
     /* Pixels the statement covers, clipped to the view like the
      * drawing itself (so far-off coordinates cannot inflate the
      * charge): the longer axis for a line, the four sides as drawn
-     * for B (corners twice), the area for BF. */
+     * for B (corners twice), the area for BF. A primitive with
+     * nothing inside the view charges the base only: the two spans
+     * are clipped independently, so a line passing wholly outside
+     * (LINE (0,-1)-(639,-1), or a diagonal past a corner) needs the
+     * segment test, and a B outline needs both spans non-empty. A
+     * line or outline that is partly inside is counted by its clipped
+     * spans, not pixel by pixel - an upper bound on the pixels drawn,
+     * never more than the full step count. BF's product is already 0
+     * when either span is empty. */
     {
         long w = span_in(x1, x2, vx1, vx2), h = span_in(y1, y2, vy1, vy2);
-        if (box == 0) pixels = w > h ? w : h;
-        else if (box == 1) pixels = 2 * (w + h);
+        if (box == 0) pixels = seg_in_view(x1, y1, x2, y2) ? (w > h ? w : h) : 0;
+        else if (box == 1) pixels = (w && h) ? 2 * (w + h) : 0;
         else pixels = w * h;
     }
     vessel_charge(LINE_BASE_CYCLES + pixels * LINE_PIXEL_CYCLES);
