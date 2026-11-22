@@ -37,6 +37,7 @@
 
 static z80 cpu;
 static int inited = 0;
+static int clk_mult = 1;    /* CPU clock: 1 = 4 MHz, 2 = 8 MHz (item 33) */
 static int pump_live = 0;   /* set by the session's first vessel_init() call */
 static int vtrace = -1;
 static int pmd_loaded = 0;
@@ -816,6 +817,11 @@ int vessel_port_in(int port)
     case 0x46: case 0xAC: return opna_status_hi();
     case 0x47: case 0xAD: return opna_data_hi(opn_addr[1] & 0xFF);
     case 0x31: case 0x32: case 0x34: case 0x35: return misc_port[port];
+    /* CPU clock sense (QUASI88 pc88main.cpp IN[6E], SW_4MHZ): bit 7
+     * reads 1 at 4 MHz and 0 at 8 MHz; bit 4 is set on the FH/MH
+     * generation this vessel models. Software that checks the clock
+     * switch therefore sees the selected mode (item 33). */
+    case 0x6E: return 0x10 | (clk_mult == 2 ? 0x00 : 0x80);
     case 0x70: return (int)(window_base >> 8);   /* RAM window base */
     case 0xE8: return p8_kanji_glyph[0][kanji_addr[0] >> 4][(kanji_addr[0] & 15) * 2 + 1];
     case 0xE9: return p8_kanji_glyph[0][kanji_addr[0] >> 4][(kanji_addr[0] & 15) * 2 + 0];
@@ -1240,9 +1246,25 @@ static int trap(void)
  * 4.17 ms and stretched MA2026's song-list phase to 10.1 s. */
 #define STMT_CYCLES 2000L
 
+/* CPU clock multiplier: 1 = 4 MHz (default), 2 = 8 MHz. The timing
+ * model counts CPU cycles, so every quantity that is a TIME on the
+ * genuine machine (VRTC period, Timer B period, the emulated second,
+ * the disk sector time, the HALT wait cap) is this many times its
+ * 4 MHz cycle count. Quantities that are WORK (STMT_CYCLES, the
+ * PUMP_SLICE advance granularity, the STEP_CAP instruction count) do
+ * not scale: the same work in half the time is what 8 MHz means.
+ * Set by the engine before vessel_session_reset() (engine.c
+ * p8_start); docs/APPROXIMATIONS.md item 33. */
+void vessel_set_clock_mult(int m)
+{
+    if (m == 1 || m == 2) clk_mult = m;
+}
+
+static long vrtc_period(void) { return VRTC_PERIOD * clk_mult; }
+
 static int in_run = 0;
 static unsigned long last_cyc = 0;
-static long vrtc_left = VRTC_PERIOD;
+static long vrtc_left = VRTC_PERIOD;        /* clk_mult is 1 at load time */
 static long tb_left = 0;
 static int vrtc_due = 0;                    /* tb_due: with tb_line above */
 static long run_poll_left = PUMP_SLICE;     /* run-loop time to the next hal_poll */
@@ -1250,7 +1272,10 @@ static int slot_vrtc_seen = 0, slot_opn_seen = 0;
 
 static long tb_period(void)
 {
-    /* Timer B period in 4 MHz CPU cycles: (256 - reg26) counts of
+    /* Timer B period in CPU cycles, derived at 4 MHz and scaled by
+     * clk_mult at the end (the timer runs off the sound board's own
+     * clock, so the same time span is twice the CPU cycles at 8 MHz
+     * and the tempo does not change): (256 - reg26) counts of
      * 1152 timer clocks at an effective Timer B clock of 3.9936 MHz.
      *
      * This follows QUASI88's calibrated interrupt model (src/intr.cpp:
@@ -1266,7 +1291,7 @@ static long tb_period(void)
      *
      * The ratio is exact: 1152 * 4000000/3993600 == 15000/13, and the
      * reduced form keeps every intermediate within a 32-bit long. */
-    return (long)(256 - opn_reg[0][0x26]) * 15000L / 13L;
+    return (long)(256 - opn_reg[0][0x26]) * 15000L / 13L * clk_mult;
 }
 
 /* Timer B started (reg 0x27 LOAD B 0 -> 1, see opn_write): the
@@ -1325,7 +1350,7 @@ static void irq_advance(long cycles)
     opna_advance(cycles);               /* audio rendering follows the same clock */
     vrtc_left -= cycles;
     if (vrtc_left <= 0) {
-        vrtc_left += VRTC_PERIOD;
+        vrtc_left += vrtc_period();
         frame_count++;                  /* the CRT refresh runs regardless
                                          * of the guest's VSYNC mask */
         if (intr_mask & 0x02) vrtc_due = 1;     /* port E6: VSYNC enabled */
@@ -1344,7 +1369,10 @@ static void irq_advance(long cycles)
         }
     }
     tb_line_update();
-    for (emu_sub += cycles; emu_sub >= 4000000L; emu_sub -= 4000000L) emu_secs++;
+    {
+        long sec = 4000000L * clk_mult;         /* CPU cycles per emulated second */
+        for (emu_sub += cycles; emu_sub >= sec; emu_sub -= sec) emu_secs++;
+    }
     if (diag_at && !diag_taken && emu_secs >= diag_at) diag_take();
 }
 
@@ -1511,7 +1539,7 @@ void vessel_session_reset(void)
      * off for the whole next session. */
     in_run = 0;
     last_cyc = 0;
-    vrtc_left = VRTC_PERIOD; tb_left = 0;
+    vrtc_left = vrtc_period(); tb_left = 0;
     vrtc_due = 0; tb_due = 0;
     run_poll_left = PUMP_SLICE;
     slot_vrtc_seen = 0; slot_opn_seen = 0;
@@ -1547,7 +1575,8 @@ static int pc_ring_pos;
  *
  * Halted time is charged to the run loop's poll budget (run_poll)
  * like executed time. */
-#define HALT_WAIT_CAP 4000000L      /* 1 s of emulated time = 60 VRTC ticks */
+#define HALT_WAIT_CAP 4000000L      /* 1 s of emulated time = 60 VRTC ticks
+                                     * (at 4 MHz; used times clk_mult) */
 
 /* Time the run loop consumes - executed instructions and HALT
  * fast-forward alike - is emulated time passing inside one
@@ -1587,7 +1616,7 @@ static int halt_wait(void)
     if (!cpu.iff1 && !cpu.iff_delay) return 0;
     while (!cpu.int_pending) {
         long dt = vrtc_left;
-        if (waited >= HALT_WAIT_CAP) return 0;
+        if (waited >= HALT_WAIT_CAP * clk_mult) return 0;
         if (opn_reg[0][0x27] & 0x02) {          /* Timer B running */
             long tb = tb_left > 0 ? tb_left : tb_period();
             if (tb < dt) dt = tb;
@@ -1814,7 +1843,7 @@ long vessel_call_pushed(unsigned entry, unsigned a, unsigned hl, unsigned bc, un
  * the 448-sector ADPCM load) collapses to a fraction of a second
  * and the whole boot sequence runs in the wrong order of
  * durations (measured against QUASI88: BGM audible ~19 s). */
-#define XDE_SECTOR_CYCLES 133333L   /* 4 MHz / 30 sectors per sec */
+#define XDE_SECTOR_CYCLES 133333L   /* 4 MHz / 30 sectors per sec (used times clk_mult) */
 
 static void vessel_burn(long cycles)
 {
@@ -1893,7 +1922,7 @@ int vessel_dram_load(int img, int ltrack, int tracks)
             if (dst < 256UL * 1024) stored++;
             for (b = 0; b < 256; b++) opna_adpcm_b_write(dst++, buf[b]);
             n++;
-            vessel_burn(XDE_SECTOR_CYCLES);
+            vessel_burn(XDE_SECTOR_CYCLES * clk_mult);
         }
     }
     if (tracing()) fprintf(stderr, "VESSEL dram_load ltrack %d tracks %d (%d sectors)\n",
@@ -1915,7 +1944,7 @@ int vessel_disk_read(int img, int ltrack, int sector, int count, unsigned addr)
         if (!d88_read_sector_img(img, t, r, buf)) break;
         for (j = 0; j < 256; j++) hal_poke(0, (addr + (unsigned)i * 256u + (unsigned)j) & 0xFFFF, buf[j]);
         if (++r > 16) { r = 1; t++; }
-        vessel_burn(XDE_SECTOR_CYCLES);
+        vessel_burn(XDE_SECTOR_CYCLES * clk_mult);
     }
     if (tracing()) fprintf(stderr, "VESSEL disk_read track %d sec %d count %d -> %04X (%d read)\n",
                            ltrack, sector, count, addr, i);

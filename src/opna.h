@@ -24,6 +24,10 @@ int  opna_data_hi(int addr);
  * (playback and data-port reads; diagnostics). */
 unsigned long opna_adpcm_b_ext_reads(void);
 void opna_advance(long cpu_cycles);
+/* CPU clock in Hz that opna_advance()'s cycles are counted in
+ * (default 4000000). Only the cycles-to-audio-time conversion follows
+ * it; the chip's own clock, hence pitch and timer rates, does not. */
+void opna_set_cpu_clock(long hz);
 /* Write / read one byte of the OPNA's ADPCM-B sample DRAM (256 KiB,
  * the Sound Board II's only writable sample memory). FFDE service 1
  * loads the PCM data block here and PMD's PCM part plays it back

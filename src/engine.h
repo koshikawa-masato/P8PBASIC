@@ -27,6 +27,12 @@ void      p8_destroy(P8Engine *e);
  * Call p8_start afterwards to run it. */
 int       p8_boot(P8Engine *e);
 void      p8_start(P8Engine *e);
+/* CPU clock for the next session: 4000000 (default) or 8000000 Hz;
+ * any other value is ignored. Takes effect at p8_start, not on a
+ * running session. At 8 MHz BASIC and machine code run twice as fast
+ * while the display rate, music tempo and pitch, and disk timing stay
+ * the same (docs/APPROXIMATIONS.md item 33). */
+void      p8_set_cpu_clock(P8Engine *e, long hz);
 void      p8_stop(P8Engine *e);          /* blocks until stopped */
 int       p8_running(P8Engine *e);
 

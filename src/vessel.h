@@ -11,6 +11,7 @@ extern "C" {
 
 void vessel_init(void);                            /* idempotent one-time setup */
 void vessel_session_reset(void);                   /* full power-on reset + setup for a new session in the same process; call after halp8_session_reset() */
+void vessel_set_clock_mult(int m);                 /* CPU clock: 1 = 4 MHz (default), 2 = 8 MHz; other values ignored. Call before vessel_session_reset() (machine-time periods scale, work charges do not) */
 void vessel_forget_disk(void);                     /* drop the open D88 image; the next read re-opens the current P8P_DISK (engine.c p8_create) */
 void vessel_exec(unsigned entry);                 /* run Z80 from entry until it RETs to a sentinel */
 long vessel_call(unsigned entry, unsigned a, unsigned hl, unsigned bc, unsigned de);

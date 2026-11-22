@@ -40,6 +40,7 @@ struct P8Engine {
     unsigned long dropped;
     unsigned long rendered;         /* all frames the sink ever saw */
     struct timespec t0;             /* p8_start wall clock (under ring_mu) */
+    long cpu_clock;                 /* 4000000 or 8000000 Hz, applied at p8_start */
     pthread_mutex_t ring_mu;        /* guards the ring and t0 */
 };
 
@@ -109,6 +110,7 @@ P8Engine *p8_create(const char *d88_path)
     P8Engine *e = (P8Engine *)calloc(1, sizeof(P8Engine));
     if (!e) return 0;
     e->d88_path = strdup(d88_path);
+    e->cpu_clock = 4000000L;
     g_engine = e;
     pthread_mutex_init(&e->ring_mu, 0);
     /* the vessel opens the disk lazily from the environment */
@@ -173,11 +175,23 @@ static void *engine_thread(void *arg)
     return 0;
 }
 
+void p8_set_cpu_clock(P8Engine *e, long hz)
+{
+    if (!e) return;
+    if (hz == 4000000L || hz == 8000000L) e->cpu_clock = hz;
+}
+
 void p8_start(P8Engine *e)
 {
     if (e->started) return;
     e->running = 1;
     e->started = 1;
+    /* The CPU clock is a per-session setting: apply it before the
+     * resets below so they initialise clock-scaled state, and
+     * unconditionally so a 4 MHz session after an 8 MHz one in the
+     * same process does not inherit the faster clock. */
+    vessel_set_clock_mult(e->cpu_clock == 8000000L ? 2 : 1);
+    opna_set_cpu_clock(e->cpu_clock);
     /* A process may boot several engines in turn: put the HAL and
      * the vessel back to power-on state. Order matters - the
      * vessel's setup pokes its stubs into the guest RAM that

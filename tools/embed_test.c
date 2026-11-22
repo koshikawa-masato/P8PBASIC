@@ -137,6 +137,12 @@ int main(int argc, char **argv)
         vessel_diag_snapshot_at(atol(getenv("P8P_COUNTERS_AT")));
     e = p8_create(argv[1]);
     if (!e) { fprintf(stderr, "create failed\n"); return 1; }
+    /* P8P_CLOCK=<Hz>: CPU clock for the session. Exact string match
+     * on the two supported values; anything else is ignored, as is
+     * an unset variable (the 4 MHz default). */
+    { const char *pc = getenv("P8P_CLOCK");
+      if (pc && !strcmp(pc, "8000000")) p8_set_cpu_clock(e, 8000000L);
+      else if (pc && !strcmp(pc, "4000000")) p8_set_cpu_clock(e, 4000000L); }
     if (p8_boot(e) != 0) { fprintf(stderr, "boot failed\n"); return 1; }
     p8_start(e);
     /* feed the key script in real time, draining audio as we go */

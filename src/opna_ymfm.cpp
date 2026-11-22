@@ -22,7 +22,9 @@ namespace {
 
 const uint32_t CHIP_CLOCK = 7987200;    /* OPNA master clock on SB2 */
 const int HOST_RATE = 44100;
-const long CPU_CLOCK = 4000000;         /* vessel CPU clock */
+long g_cpu_clock = 4000000;             /* vessel CPU clock (opna_set_cpu_clock);
+                                         * CHIP_CLOCK does not follow it: the
+                                         * sound board has its own oscillator */
 
 unsigned long g_ext_reads_b = 0, g_ext_writes_b = 0;   /* diagnostics */
 unsigned long g_ext_reads_a = 0;
@@ -345,12 +347,19 @@ extern "C" unsigned long opna_adpcm_b_ext_reads(void)
     return g_ext_reads_b;
 }
 
+extern "C" void opna_set_cpu_clock(long hz)
+{
+    if (hz <= 0 || hz == g_cpu_clock) return;
+    g_cpu_clock = hz;
+    frame_acc = 0;      /* the sub-frame remainder was in the old clock's units */
+}
+
 extern "C" void opna_advance(long cpu_cycles)
 {
     if (!ensure_init()) return;
     frame_acc += (long long)cpu_cycles * HOST_RATE;
-    long frames = (long)(frame_acc / CPU_CLOCK);
-    frame_acc %= CPU_CLOCK;
+    long frames = (long)(frame_acc / g_cpu_clock);
+    frame_acc %= g_cpu_clock;
     if (frames > HOST_RATE) frames = HOST_RATE;   /* bound pathological deltas */
     pending_frames += frames;
     /* The third condition keeps chunk delivery on the same advance as
