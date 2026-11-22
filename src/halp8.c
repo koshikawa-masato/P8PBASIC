@@ -290,6 +290,10 @@ static int gfx200 = 0;
 static int pal[16][3];
 static int pal_init = 0;
 static int poll_n = 0;              /* hal_poll's statement counter */
+static int scan_n = 0;              /* keyscan's own gate: the keyboard
+                                     * scanner keeps its historical
+                                     * once-per-64-calls cadence,
+                                     * independent of the pacing gate */
 
 /* Put every per-session static back to its power-on value, so a new
  * engine in the same process starts from the state a fresh process
@@ -510,24 +514,46 @@ void hal_setdate(int y, int mo, int d) { (void)y; (void)mo; (void)d; }
  * lands here even when the guest never waits for input. This is
  * also the pacing point: once music is rendering, the interpreter
  * must not run ahead of the audio clock, or the host's ring buffer
- * overflows and playback tears. Checked every 64 statements: one check interval advances ~0.03 s of emulated time on the statement path (APPROXIMATIONS item 6), ~0.27 s through sector burns, which the 2 s ring absorbs. */
+ * overflows and playback tears. Checked every 8 statements: one
+ * check interval advances ~0.004 s (a quarter frame) of emulated
+ * time on the statement path (APPROXIMATIONS item 6), ~0.03 s
+ * through sector burns, which the 2 s ring absorbs. */
 void hal_poll(void)
 {
     if (stop_req) p8_bail();
     while (paused_flag && !stop_req) usleep(10000);
     if (stop_req) p8_bail();
-    if (++poll_n < 64) return;
+    if (++poll_n < 8) return;
     poll_n = 0;
-    keyscan();          /* a running program still gets its keys scanned */
-    /* Each statement advances ~0.5 ms of emulated time, so a fast
-     * host produces seconds of audio per check interval; sleep off
-     * the whole lead (in stop-responsive chunks), not a fixed cap. */
+    if (++scan_n >= 8) {        /* 8 pacing gates = the old 64-call cadence */
+        scan_n = 0;
+        keyscan();      /* a running program still gets its keys scanned */
+    }
+    /* Frame-granularity pacing. The audio lead anchors the average
+     * rate to wall time; the single threshold below (the 0.10 s target
+     * lead plus half a frame) only sets how far production may run
+     * ahead before sleeping, i.e. latency. The excess is slept off in
+     * chunks of at most 2 ms with the lead re-checked after each. The
+     * previous scheme (break at 0.15 s, sleep toward 0.10 s in chunks
+     * of up to 50 ms, checked every 64 statements) produced guest
+     * frames in ~3-frame bursts separated by long sleeps: measured
+     * VRTC wrap arrivals were bimodal (clusters <8 ms apart, then gaps
+     * of 40-80 ms, nothing in between), which a 60 Hz display samples
+     * as dropped and held frames even though the average is about
+     * 60 fps. With the 8-call gate, a check on the statement path tops
+     * the lead up by at most a quarter frame (sector burns advance in
+     * 16,667-cycle slices, about two frames per eight checks), so in
+     * steady playback wraps emerge ~16.7 ms apart in wall time.
+     * Wall-clock only: emulated time is untouched. */
     while (!stop_req) {
+        const double high = 0.10 + 1.0 / 120.0;     /* target lead + half a frame */
         double ahead = p8_audio_seconds() - p8_wall_seconds();
+        double excess;
         long us;
-        if (ahead <= 0.15) break;
-        us = (long)((ahead - 0.10) * 1000000.0);
-        if (us > 50000) us = 50000;
+        if (ahead <= high) break;
+        excess = (ahead - high) * 1000000.0;
+        if (excess > 2000.0) excess = 2000.0;   /* clamp before converting */
+        us = (long)excess;
         if (us <= 0) break;
         usleep((useconds_t)us);
     }
