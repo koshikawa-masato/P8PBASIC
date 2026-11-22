@@ -98,6 +98,12 @@ int p8_audio_read(P8Engine *e, short *out, int frames)
 
 unsigned long p8_audio_dropped(P8Engine *e) { return e->dropped; }
 
+unsigned long p8_frame_count(P8Engine *e)
+{
+    (void)e;
+    return vessel_frame_count();
+}
+
 P8Engine *p8_create(const char *d88_path)
 {
     P8Engine *e = (P8Engine *)calloc(1, sizeof(P8Engine));

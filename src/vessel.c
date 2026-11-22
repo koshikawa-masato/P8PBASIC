@@ -1282,6 +1282,10 @@ static void tb_restart(void)
  * thread at an arbitrary moment, the snapshot point is the same
  * instruction on every run. */
 static unsigned long irq_tb_count = 0, irq_vrtc_count = 0;
+static unsigned long frame_count = 0;   /* VRTC period wraps: the guest
+                                         * frame clock (60 Hz), counted
+                                         * whether or not VSYNC is unmasked */
+unsigned long vessel_frame_count(void) { return frame_count; }
 static long emu_sub = 0;                    /* cycles into the current second */
 static long emu_secs = 0;                   /* whole emulated seconds this session */
 static long diag_at = 0;                    /* snapshot second, 0 = off */
@@ -1322,6 +1326,8 @@ static void irq_advance(long cycles)
     vrtc_left -= cycles;
     if (vrtc_left <= 0) {
         vrtc_left += VRTC_PERIOD;
+        frame_count++;                  /* the CRT refresh runs regardless
+                                         * of the guest's VSYNC mask */
         if (intr_mask & 0x02) vrtc_due = 1;     /* port E6: VSYNC enabled */
     }
     if (opn_reg[0][0x27] & 0x02) {              /* Timer B enabled */
@@ -1512,7 +1518,7 @@ void vessel_session_reset(void)
     /* diagnostics: counts, emulated clock and the snapshot restart
      * with the session; the armed snapshot second (diag_at) is the
      * host's setting and stays */
-    irq_tb_count = 0; irq_vrtc_count = 0;
+    irq_tb_count = 0; irq_vrtc_count = 0; frame_count = 0;
     emu_sub = 0; emu_secs = 0;
     diag_taken = 0;
     xde_img_warned = 0;
