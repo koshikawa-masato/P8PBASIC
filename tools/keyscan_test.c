@@ -3,8 +3,11 @@
  * item 32). No guest runs: matrix cells are set through
  * halp8_set_matrix (active-low: pressed = bit cleared), the scanner
  * is pumped through hal_idle / hal_getkey, and the generated codes
- * are read back with hal_getkey. The auto-repeat checks use real
- * time (about 1.3 s in total). Exit 0 = all checks pass. */
+ * are read back with hal_getkey. The matrix reaches the scanner
+ * through the key buffer (kb_tick; item 34: 20 ms debounce, 40 ms
+ * minimum visible press), so every wait below is real time and long
+ * enough for a press or a release to pass it (roughly 10 s in total,
+ * the auto-repeat checks included). Exit 0 = all checks pass. */
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -43,24 +46,28 @@ static void release(int row, int bit)
     halp8_set_matrix(row, mx[row]);
 }
 
-/* Pump the scanner for a few idle slices; first code produced or -1. */
+/* Pump the scanner for 40 ms (twice the key buffer's debounce time);
+ * first code produced or -1. */
 static int next_key(void)
 {
-    int i, k;
-    for (i = 0; i < 20; i++) {
+    long long end = now_ms() + 40;
+    int k;
+    do {
         hal_idle();
         k = hal_getkey();
         if (k >= 0) return k;
-    }
+    } while (now_ms() < end);
     return -1;
 }
 
 /* Let the scanner observe the current matrix (a release followed
- * by a re-press between two scans is invisible to it otherwise). */
+ * by a re-press between two scans is invisible to it otherwise).
+ * 70 ms: a key released the moment it became visible stays visible
+ * for the key buffer's 40 ms minimum press. */
 static void pump(void)
 {
-    int i;
-    for (i = 0; i < 10; i++) hal_idle();
+    long long end = now_ms() + 70;
+    do hal_idle(); while (now_ms() < end);
     while (hal_getkey() >= 0) ;
 }
 
@@ -227,7 +234,7 @@ int main(void)
     n = count_for(450, 'A');
     result("repeat: at least 2 by 750 ms", n >= 2, n, 2);
     release(2, 1);
-    (void)count_for(20, 'A');           /* let the scanner see the release */
+    (void)count_for(40, 'A');           /* let the scanner see the release */
     n = count_for(200, 'A');
     chk("repeat: stops on release", n, 0);
 
@@ -240,7 +247,7 @@ int main(void)
     n = count_for(700, 'A');
     chk("repeat2: A no longer repeats", n, 0);
     release(2, 2);
-    (void)count_for(20, 'B');
+    (void)count_for(40, 'B');
     n = count_for(200, 'B') + count_for(1, 'A');
     chk("repeat2: B released, A held: silence", n, 0);
     settle();
@@ -251,6 +258,7 @@ int main(void)
     n = count_for(700, 'A');
     result("repeat3: repeats before GRPH", n >= 1, n, 1);
     press(8, 4);
+    (void)count_for(40, 'A');           /* let GRPH pass the key buffer */
     n = count_for(250, 'A');
     chk("repeat3: GRPH halts repeats", n, 0);
     release(8, 4);

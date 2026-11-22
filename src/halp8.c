@@ -81,10 +81,79 @@ static int kq_push_if_empty(int code)
     return done;
 }
 
+/* ---- key buffer (debounce between the host feed and the guest) ----
+ * The host writes the RAW matrix; the guest (keyscan, hal_keymatrix =
+ * INP ports 00-0E) reads kmatrix, the VISIBLE one. kb_tick() promotes
+ * raw -> visible per cell, on the interpreter thread:
+ *  - a raw value that differs from the visible one becomes visible
+ *    once it has been stable for KB_DEBOUNCE_MS;
+ *  - a release (visible down -> up) also waits until the visible
+ *    press has lasted KB_MIN_PRESS_MS, so once a tap is promoted it
+ *    cannot fall between two guest polls. (A press that starts and
+ *    ends entirely between two ticks is never promoted at all.)
+ * A host feed (on-screen stick, game controller) can flap a cell
+ * several times within a few ms; the genuine keyboard does not. This
+ * models the keyboard's debouncing as a whole, not a chip's timing
+ * (docs/APPROXIMATIONS.md item 34). Everything here is under km_mu:
+ * the app thread writes the raw side, the engine thread reads it. */
+#define KB_DEBOUNCE_MS  20
+#define KB_MIN_PRESS_MS 40
+static unsigned char kb_raw[16];        /* what the host last fed */
+static long long kb_raw_t[16][8];       /* when the cell's raw value last changed */
+static long long kb_vis_t[16][8];       /* when the cell's visible value last changed */
+
+static long long ks_now_ms(void);
+
 void halp8_set_matrix(int idx, unsigned char v)
 {
+    int bit, diff;
+    long long now;
+    idx &= 15;
     pthread_mutex_lock(&km_mu);
-    kmatrix[idx & 15] = v;
+    now = ks_now_ms();          /* inside the lock: a timestamp sampled
+                                 * before it could be arbitrarily old
+                                 * by the time the change is published */
+    diff = kb_raw[idx] ^ v;
+    for (bit = 0; diff && bit < 8; bit++)
+        if (diff & (1 << bit)) kb_raw_t[idx][bit] = now;
+    kb_raw[idx] = v;
+    pthread_mutex_unlock(&km_mu);
+}
+
+/* Promote the raw matrix into the guest-visible one (see above). */
+static void kb_tick(void)
+{
+    int row, bit;
+    long long now;
+    pthread_mutex_lock(&km_mu);
+    now = ks_now_ms();          /* inside the lock, as in the writer:
+                                 * the ages judged below must be ages
+                                 * at promotion time, not at call time */
+    
+    for (row = 0; row < 16; row++) {
+        int diff = kb_raw[row] ^ kmatrix[row];
+        if (!diff) continue;
+        for (bit = 0; bit < 8; bit++) {
+            int m = 1 << bit;
+            if (!(diff & m)) continue;
+            if (now - kb_raw_t[row][bit] < KB_DEBOUNCE_MS) continue;
+            if ((kb_raw[row] & m) &&        /* active-low: this is a release */
+                now - kb_vis_t[row][bit] < KB_MIN_PRESS_MS) continue;
+            kmatrix[row] = (unsigned char)((kmatrix[row] & ~m) | (kb_raw[row] & m));
+            kb_vis_t[row][bit] = now;
+        }
+    }
+    pthread_mutex_unlock(&km_mu);
+}
+
+/* Power-on state: every cell up on both sides, nothing pending. */
+static void kb_reset(void)
+{
+    pthread_mutex_lock(&km_mu);
+    memset(kb_raw, 0xFF, sizeof(kb_raw));
+    memset(kmatrix, 0xFF, sizeof(kmatrix));   /* idle = nothing pressed */
+    memset(kb_raw_t, 0, sizeof(kb_raw_t));
+    memset(kb_vis_t, 0, sizeof(kb_vis_t));
     pthread_mutex_unlock(&km_mu);
 }
 void halp8_request_stop(void) { stop_req = 1; }
@@ -97,7 +166,8 @@ int  halp8_paused(void) { return paused_flag; }
 /* ---- keyboard character generation (the ROM's matrix scan) ----
  * The host feeds only the key matrix. On the genuine machine the ROM
  * scans that matrix and turns press edges into characters, with
- * auto-repeat; keyscan() is that scanner. It reads kmatrix, never
+ * auto-repeat; keyscan() is that scanner. It reads kmatrix (the
+ * debounced, guest-visible matrix the key buffer maintains), never
  * writes it, and pushes the generated codes into the key queue the
  * interpreter reads (INKEY$, INPUT, the line editor). It runs on the
  * interpreter thread only (hal_poll / hal_idle / hal_getkey).
@@ -322,8 +392,8 @@ void halp8_session_reset(void)
     tick = 0;
     brkflag = 0;
     inp_direct = 0;
-    memset(kmatrix, 0xFF, sizeof(kmatrix));   /* idle = nothing pressed */
-    memcpy(ks_prev, kmatrix, sizeof(ks_prev));  /* scanner: no edges pending */
+    kb_reset();                     /* raw and visible: nothing pressed */
+    memset(ks_prev, 0xFF, sizeof(ks_prev));     /* scanner: no edges pending */
     ks_caps = ks_kana = 0;
     ks_rep_row = -1; ks_rep_bit = 0; ks_rep_code = 0;
     ks_rep_due = 0;
@@ -343,7 +413,7 @@ void halp8_cursor(int *x, int *y, int *visible)
 void hal_init(int f)
 {
     (void)f;
-    memset(kmatrix, 0xFF, sizeof(kmatrix));   /* idle = nothing pressed */
+    kb_reset();                     /* idle = nothing pressed */
 }
 void hal_term(void) { p8_bail(); }
 
@@ -369,6 +439,7 @@ void hal_width40(int on) { w40 = on; }
 int hal_getkey(void)
 {
     if (stop_req) p8_bail();
+    kb_tick();
     keyscan();
     return kq_pop();
 }
@@ -396,6 +467,7 @@ void hal_idle(void)
     while (paused_flag && !stop_req) usleep(10000);
     if (stop_req) p8_bail();
     tick++;
+    kb_tick();
     keyscan();
     /* When the guest is waiting for input there is nothing to
      * compute; yield real time so the interpreter does not spin
@@ -525,6 +597,7 @@ void hal_poll(void)
     if (stop_req) p8_bail();
     if (++poll_n < 8) return;
     poll_n = 0;
+    kb_tick();          /* every gate: INP polling sees promotions promptly */
     if (++scan_n >= 8) {        /* 8 pacing gates = the old 64-call cadence */
         scan_n = 0;
         keyscan();      /* a running program still gets its keys scanned */

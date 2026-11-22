@@ -33,7 +33,7 @@ EMBED_OBJS=$(ls build-embed/*.o | grep -v embed_test \
              | grep -v subsys_test | grep -v dramload_test | grep -v pcmb_ports_test \
              | grep -v kanjifont_test | grep -v gfxmirror_test \
              | grep -v restart_test | grep -v d88fix_test \
-             | grep -v keyscan_test)
+             | grep -v keyscan_test | grep -v keybuffer_test)
 unit_test() { # name [args...]
   _t=$1; shift
   cc -O1 -std=gnu11 -Isrc -Ithird_party/z80 -c "tools/$_t.c" \
@@ -49,9 +49,15 @@ unit_test kanjifont_test
 unit_test pcmb_ports_test
 unit_test gfxmirror_test
 # Keyboard character generation from the key matrix (halp8.c keyscan;
-# docs/APPROXIMATIONS.md item 32). Uses real time for the auto-repeat
-# checks, so it takes about 1.5 s.
+# docs/APPROXIMATIONS.md item 32). Every key passes the key buffer
+# in real time (20 ms debounce, 40 ms minimum press), so it takes
+# roughly 10 s.
 unit_test keyscan_test
+# Key buffer between the host-fed matrix and the guest-visible one
+# (halp8.c kb_tick; docs/APPROXIMATIONS.md item 34): chatter is
+# swallowed, a settled press appears once, a quick tap stays visible
+# long enough. Real time, about 1.5 s.
+unit_test keybuffer_test
 # Disk-layer boundaries on synthetic D88 images built by the test
 # itself (review items C-2 / L-2), so this runs without the game
 # disk: two bundled images, cut-off files, a broken track table, a
