@@ -338,9 +338,16 @@ void p8_frame(P8Engine *e, unsigned char *rgba)
  * decoration commands keep the color and the semi-graphic flag
  * (the CRTC's color-attribute mode, which is what this program's
  * yellow 0xC8 headers and graphic 0x18/0x98 roll rows require).
- * Blink is not phased here (cells stay visible). Merged attr
- * bytes use the host's format: color number in bits 7..5, bit 4
- * = semi-graphic.
+ * A decoration command replaces every decoration at once (none is
+ * sticky across it). Merged attr bytes use the host's format
+ * (src/screen.c): color number in bits 7..5, bit 4 = semi-graphic,
+ * bit 3 = line (the guest's under line and upper line both land
+ * here - the host has a single line decoration), bit 2 = reverse,
+ * bit 1 = blink. The blink BIT is emitted and the renderer owns the
+ * phase: the engine deliberately never blanks a blinking cell, so
+ * text dumps stay phase-independent. Secret is expressed as before,
+ * by blanking the cell's code; bit 0 is left clear on every cell
+ * this merge colors.
  */
 #define TEXT_IMAGE 0xF3C8
 static unsigned short merged_codes[25 * 80];
@@ -367,6 +374,7 @@ static void merge_text(void)
     const unsigned short *tv = halp8_text_codes();
     const unsigned char  *ta = halp8_text_attrs();
     int run_color = 0xE0, run_graph = 0, run_secret = 0, run_reverse = 0;
+    int run_blink = 0, run_upper = 0, run_under = 0;
     int x, y, j;
     for (y = 0; y < 25; y++) {
         int base = TEXT_IMAGE + y * 120;
@@ -393,6 +401,7 @@ static void merge_text(void)
             int img = hal_peek(0, base + x);
             unsigned short code;
             unsigned char attr;
+            int deco;
             if (slot[x]) {
                 int a = slot[x] & 0xFF;
                 governed = 1;
@@ -401,16 +410,22 @@ static void merge_text(void)
                     run_graph = (a & 0x10) != 0;
                     strong = (a & 0xE0) != 0;
                 } else {                /* decoration command: sets
-                                         * the decorations, keeps the
-                                         * color AND the graphic
+                                         * ALL the decorations, keeps
+                                         * the color AND the graphic
                                          * flag (CRTC color-attr
                                          * mode) */
                     run_secret = (a & 0x01) != 0;
+                    run_blink = (a & 0x02) != 0;
                     run_reverse = (a & 0x04) != 0;
-                    strong = run_reverse;
+                    run_upper = (a & 0x10) != 0;
+                    run_under = (a & 0x20) != 0;
+                    strong = run_reverse || run_blink ||
+                             run_upper || run_under;
                 }
             }
-            attr = (unsigned char)(run_color | (run_graph ? 0x10 : 0));
+            deco = ((run_upper || run_under) ? 0x08 : 0) |
+                   (run_reverse ? 0x04 : 0) | (run_blink ? 0x02 : 0);
+            attr = (unsigned char)(run_color | (run_graph ? 0x10 : 0) | deco);
             if (run_secret) {
                 merged_codes[y * 80 + x] = 0;
                 merged_attrs[y * 80 + x] = attr;
@@ -436,14 +451,14 @@ static void merge_text(void)
             } else {
                 /* Interpreter cell. An image pair recolors it only
                  * when it actually changes something (a marker's
-                 * color, graphic mode, reverse) - a pair that just
+                 * color, graphic mode, a decoration) - a pair that just
                  * restates the cell's own color leaves the
                  * interpreter's byte, decorations and all, alone. */
                 merged_codes[y * 80 + x] = tv[y * 80 + x];
                 merged_attrs[y * 80 + x] =
                     (governed && strong &&
                      (run_color != (ta[y * 80 + x] & 0xE0) ||
-                      run_graph || run_reverse))
+                      run_graph || deco))
                         ? attr : ta[y * 80 + x];
             }
         }
