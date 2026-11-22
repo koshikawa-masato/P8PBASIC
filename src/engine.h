@@ -54,6 +54,7 @@ void      p8_set_matrix(P8Engine *e, int idx, unsigned char v);
 int       p8_audio_read(P8Engine *e, short *out, int frames);
 unsigned long p8_audio_dropped(P8Engine *e);
 unsigned long p8_frame_count(P8Engine *e);   /* guest frames (VRTC wraps) since session start */
+int           p8_rhythm_loaded(P8Engine *e);  /* rhythm samples loaded at session start (0-6, -1 = none yet) */
 
 /* Screen: graphics are composited into a 640x400 RGBA buffer.
  * Text is NOT drawn into it (the engine ships no font ROM); read

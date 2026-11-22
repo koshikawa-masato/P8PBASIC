@@ -42,6 +42,7 @@ struct P8Engine {
     struct timespec t0;             /* p8_start wall clock (under ring_mu) */
     long cpu_clock;                 /* 4000000 or 8000000 Hz, applied at p8_start */
     char *rhythm_dir;               /* external rhythm samples, applied at p8_start */
+    int rhythm_loaded;              /* samples the last p8_start loaded (0-6) */
     pthread_mutex_t ring_mu;        /* guards the ring and t0 */
 };
 
@@ -104,6 +105,16 @@ unsigned long p8_frame_count(P8Engine *e)
 {
     (void)e;
     return vessel_frame_count();
+}
+
+/* Rhythm samples loaded by the last p8_start (0-6); -1 while no
+ * session has started. Diagnostics: lets the host prove the external
+ * supply actually arrived, instead of inferring it from the audio. */
+int p8_rhythm_loaded(P8Engine *e)
+{
+    if (!e) return -1;
+    if (!e->started) return -1;
+    return e->rhythm_loaded;
 }
 
 P8Engine *p8_create(const char *d88_path)
@@ -207,8 +218,8 @@ void p8_start(P8Engine *e)
     opna_set_cpu_clock(e->cpu_clock);
     /* Likewise per session: a session without a rhythm dir never
      * plays an earlier session's samples. */
-    if (e->rhythm_dir) opna_load_rhythm_dir(e->rhythm_dir);
-    else opna_clear_rhythm();
+    if (e->rhythm_dir) e->rhythm_loaded = opna_load_rhythm_dir(e->rhythm_dir);
+    else { opna_clear_rhythm(); e->rhythm_loaded = 0; }
     /* A process may boot several engines in turn: put the HAL and
      * the vessel back to power-on state. Order matters - the
      * vessel's setup pokes its stubs into the guest RAM that
