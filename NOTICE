@@ -1,0 +1,141 @@
+NOTICE — P8PBASIC
+
+This file collects the notices for everything included in P8PBASIC. Binary
+distributions that embed the engine should reproduce this file.
+
+Components 1–3 are under the MIT License; its text is reproduced once, under
+"MIT License" at the end of this file.
+
+
+======================================================================
+1. P9PBASIC
+======================================================================
+
+Copyright (c) 2026 Imaha486
+Licence: MIT License
+Source:  https://github.com/Imaha486/P9PBASIC
+In tree: src/ (interpreter), samples/, docs/MANUAL.md
+
+The upstream interpreter this fork derives from. The full licence text is
+also in the repository LICENSE file.
+
+
+======================================================================
+2. P8PBASIC fork additions
+======================================================================
+
+Copyright (c) 2026 Masato Koshikawa
+Licence: MIT License
+In tree: src/ (vessel.c, engine.c, halp8.c, materialize.c, p88conv.c,
+         p88disk.c, opna_ymfm.cpp, kanjifont.c), tools/, tests/, docs/
+
+The PC-8801 retargeting: the Z80 vessel, the engine and the HAL.
+
+
+======================================================================
+3. z80
+======================================================================
+
+Copyright (c) 2019 Nicolas Allemand
+Licence: MIT License
+Source:  https://github.com/superzazu/z80
+In tree: third_party/z80/ (vendored unmodified)
+
+Z80 CPU core. The full licence text is also in third_party/z80/LICENSE.
+
+
+======================================================================
+4. ymfm
+======================================================================
+
+Copyright (c) 2021 Aaron Giles
+Licence: BSD 3-Clause License
+Source:  https://github.com/aarongiles/ymfm
+In tree: third_party/ymfm/ (a subset, the YM2608/OPNA files only, vendored
+         unmodified)
+
+OPNA (YM2608) sound rendering. The full licence text is also in
+third_party/ymfm/LICENSE and is reproduced here:
+
+----------------------------------------------------------------------
+BSD 3-Clause License
+
+Copyright (c) 2021, Aaron Giles
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+----------------------------------------------------------------------
+
+
+======================================================================
+5. Shinonome font
+======================================================================
+
+Author:  /efont/ Project
+Licence: public domain
+In tree: tools/fonts/ (BDF sources), src/kanjifont.c (generated)
+
+Glyph data generated into src/kanjifont.c from the BDF files in
+tools/fonts/ by tools/gen_kanjifont.py.
+
+
+======================================================================
+6. NEOMSC detection signature
+======================================================================
+
+Origin:  NEOMSC, part of "MUSIC ARENA 2026" by MEGAFEPPS
+In tree: src/vessel.c
+
+A 30-byte sequence from NEOMSC, used only as a fingerprint to detect that
+NEOMSC was loaded. It is compared against, never executed, and is not a
+code contribution. Its origin and purpose are commented at the site.
+
+
+======================================================================
+MIT License (components 1–3)
+======================================================================
+
+Copyright (c) 2026 Imaha486              (P9PBASIC)
+Copyright (c) 2026 Masato Koshikawa      (P8PBASIC fork additions)
+Copyright (c) 2019 Nicolas Allemand      (z80)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
