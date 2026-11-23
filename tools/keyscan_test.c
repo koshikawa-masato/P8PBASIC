@@ -4,8 +4,8 @@
  * halp8_set_matrix (active-low: pressed = bit cleared), the scanner
  * is pumped through hal_idle / hal_getkey, and the generated codes
  * are read back with hal_getkey. The matrix reaches the scanner
- * through the key buffer (kb_tick; item 34: 20 ms debounce, 40 ms
- * minimum visible press), so every wait below is real time and long
+ * through the key buffer (kb_tick; item 34: instant press, release
+ * after 10 ms of stability and a 40 ms minimum visible press), so every wait below is real time and long
  * enough for a press or a release to pass it (roughly 10 s in total,
  * the auto-repeat checks included). Exit 0 = all checks pass. */
 #include <stdio.h>
@@ -46,8 +46,8 @@ static void release(int row, int bit)
     halp8_set_matrix(row, mx[row]);
 }
 
-/* Pump the scanner for 40 ms (twice the key buffer's debounce time);
- * first code produced or -1. */
+/* Pump the scanner for 40 ms (ample for the key buffer: a press is
+ * promoted at the first tick); first code produced or -1. */
 static int next_key(void)
 {
     long long end = now_ms() + 40;

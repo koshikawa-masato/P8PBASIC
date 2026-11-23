@@ -1,14 +1,19 @@
 /* keybuffer_test.c - unit checks for the embedded HAL's key buffer
- * (halp8.c kb_tick; docs/APPROXIMATIONS.md item 34): the debounce
+ * (halp8.c kb_tick; docs/APPROXIMATIONS.md item 34): the filter
  * between the matrix the host feeds (halp8_set_matrix) and the one
- * the guest sees (hal_keymatrix, keyscan). No guest runs: one cell
+ * the guest sees (hal_keymatrix, keyscan). It is asymmetric: a press
+ * is visible at the first tick, a release only after 10 ms of raw
+ * stability and 40 ms of visible press - except that a tick which
+ * promotes a press also promotes every pending release that has had
+ * its 40 ms (snapshot consistency; a second cell, SHIFT, is driven
+ * for those cases). No guest runs: one cell
  * (the A key) is driven on a scripted timeline, the buffer and the
  * scanner are pumped through hal_idle, the visible matrix is sampled
  * with hal_keymatrix and the generated characters are read back with
  * hal_getkey. The buffer reads the wall clock, so the timeline is
- * real time (about 1.5 s in total). A flap whose steps were stretched
- * by the scheduler past the debounce time is not the scripted signal
- * any more; such a run is repeated (a few times at most).
+ * real time (about 2.5 s in total). A flap whose steps were stretched
+ * by the scheduler towards the release time is not the scripted
+ * signal any more; such a run is repeated (a few times at most).
  * Exit 0 = all checks pass. */
 #include <stdio.h>
 #include <string.h>
@@ -19,8 +24,11 @@
 
 #define ROW 2               /* the A key: row 2, bit 1 */
 #define BIT 1
+#define MROW 8              /* SHIFT: row 8, bit 6 (the modifier cell) */
+#define MBIT 6
 #define FLAP_MS 3
-#define STALL_MS 15         /* a flap step this long is a scheduler stall */
+#define STALL_MS 8          /* a flap step this long is a scheduler stall
+                             * (it must stay under the 10 ms release time) */
 #define TRIES 5
 
 static int fails;
@@ -54,13 +62,28 @@ static int visible(void)
     return !(hal_keymatrix(ROW) & (1 << BIT));
 }
 
+/* A second cell (the modifier of the pull-through cases); it shares
+ * no row with the A key, so each feed writes its own row. */
+static void feed_cell(int row, int bit, int down)
+{
+    halp8_set_matrix(row, (unsigned char)(down ? 0xFF & ~(1 << bit) : 0xFF));
+}
+static int visible_cell(int row, int bit)
+{
+    return !(hal_keymatrix(row) & (1 << bit));
+}
+
 /* What the guest saw of the cell while the timeline ran. */
 static int seen_down;                   /* the cell was visibly down */
 static long long first_down, last_down; /* first / last sample that was down */
+static int was_down;                    /* the previous sample was down */
+static int drops;                       /* visible down -> up transitions */
+static long long first_up;              /* first sample up after a down */
 
 static void watch_reset(void)
 {
-    seen_down = 0; first_down = last_down = 0;
+    seen_down = was_down = drops = 0;
+    first_down = last_down = first_up = 0;
 }
 
 /* Pump the buffer and the scanner for `ms` of real time, sampling
@@ -75,6 +98,11 @@ static void run_ms(int ms)
         if (visible()) {
             if (!seen_down) first_down = t;
             seen_down = 1; last_down = t;
+            was_down = 1;
+        } else if (was_down) {
+            if (!drops) first_up = t;
+            drops++;
+            was_down = 0;
         }
     } while (t < end);
 }
@@ -119,39 +147,41 @@ int main(void)
 {
     int n, try;
     long worst;
-    long long t_settled, t_press;
+    long long t_release;
 
     halp8_session_reset();
     settle();
     chk("idle: cell up", visible(), 0);
 
-    /* 1. chatter that ends up: the guest never sees the cell down */
+    /* 1. a flap that ends up: the first press is visible at once and
+     * the release + re-press pairs (3 ms each) never drop it; the
+     * guest sees one press, released after the flap */
     for (try = 0; try < TRIES; try++) {
         settle();
         worst = flap(90, 0);
         if (worst < STALL_MS) break;
     }
-    result("chatter: timeline held", worst < STALL_MS, worst, STALL_MS);
+    result("flap up: timeline held", worst < STALL_MS, worst, STALL_MS);
+    chk("flap up: press visible", seen_down, 1);
+    chk("flap up: never dropped during the flap", drops, 0);
     run_ms(60);
-    chk("chatter: never visible", seen_down, 0);
-    chk("chatter: queue empty", drain(), 0);
+    chk("flap up: released after the flap", visible(), 0);
+    chk("flap up: one release", drops, 1);
+    chk("flap up: exactly one character", drain(), 1);
 
-    /* 2. chatter that settles down: one press, after the settling */
+    /* 2. a flap that settles down: one press, held throughout */
     for (try = 0; try < TRIES; try++) {
         settle();
         worst = flap(60, 1);
-        t_settled = last_feed;          /* flap's last feed: the final press */
-        if (worst < STALL_MS && !seen_down) break;
+        if (worst < STALL_MS) break;
     }
-    result("settle: timeline held", worst < STALL_MS, worst, STALL_MS);
-    chk("settle: not visible during the flap", seen_down, 0);
-    chk("settle: no character during the flap", hal_keyhit(), 0);
+    result("flap down: timeline held", worst < STALL_MS, worst, STALL_MS);
+    chk("flap down: press visible", seen_down, 1);
+    chk("flap down: never dropped during the flap", drops, 0);
     run_ms(60);
-    chk("settle: press visible once settled", seen_down, 1);
-    result("settle: only after the debounce time",
-           first_down - t_settled >= 20, (long)(first_down - t_settled), 20);
-    chk("settle: still down", visible(), 1);
-    chk("settle: exactly one character", drain(), 1);
+    chk("flap down: still down", visible(), 1);
+    chk("flap down: never dropped afterwards", drops, 0);
+    chk("flap down: exactly one character", drain(), 1);
 
     /* 3. a quick tap (50 ms): seen, once, and for long enough */
     settle();
@@ -165,11 +195,11 @@ int main(void)
            last_down - first_down >= 35, (long)(last_down - first_down), 35);
     chk("tap: exactly one character", drain(), 1);
 
-    /* a tap just past the debounce time (25 ms) is stretched to the
-     * minimum visible press */
+    /* a very short tap (5 ms) is promoted at once and stretched to
+     * the minimum visible press: its release waits for the 40 ms */
     settle();
     feed(1);
-    run_ms(25);
+    run_ms(5);
     feed(0);
     run_ms(90);
     chk("short tap: press visible", seen_down, 1);
@@ -178,20 +208,84 @@ int main(void)
            last_down - first_down >= 35, (long)(last_down - first_down), 35);
     chk("short tap: exactly one character", drain(), 1);
 
-    /* 4. a normal hold (300 ms): one character, no repeat yet */
+    /* 4. a normal hold (300 ms): visible at the first tick after the
+     * feed, one character, no repeat yet; the release (long past the
+     * minimum press) is promoted once it has been stable for 10 ms */
     settle();
-    t_press = now_ms();
     feed(1);
+    hal_idle();
+    chk("hold: visible at the first tick", visible(), 1);
     run_ms(300);
     chk("hold: visible", visible(), 1);
-    result("hold: visible within 40 ms",
-           first_down - t_press <= 40, (long)(first_down - t_press), 40);
+    chk("hold: never dropped", drops, 0);
     n = drain();
     chk("hold: exactly one character at 300 ms", n, 1);
     feed(0);
+    t_release = last_feed;
     run_ms(80);
     chk("hold: released", visible(), 0);
+    result("hold: release only after 10 ms",
+           first_up - t_release >= 10, (long)(first_up - t_release), 10);
+    result("hold: release within 40 ms",
+           first_up - t_release <= 40, (long)(first_up - t_release), 40);
     chk("hold: nothing after the release", drain(), 0);
+
+    /* 5. snapshot consistency (pull-through): a press never overtakes
+     * a release that has had its minimum press. SHIFT is held, then
+     * released and the A key pressed at once (well inside the 10 ms
+     * release time): the very first tick shows A down AND SHIFT up,
+     * so the scanner never translates A against the stale SHIFT */
+    settle();
+    feed_cell(MROW, MBIT, 1);
+    run_ms(100);
+    chk("pull: modifier held", visible_cell(MROW, MBIT), 1);
+    (void)drain();
+    watch_reset();
+    feed_cell(MROW, MBIT, 0);
+    feed(1);
+    hal_idle();                         /* one tick */
+    chk("pull: press visible at the first tick", visible(), 1);
+    chk("pull: modifier release in the same tick", visible_cell(MROW, MBIT), 0);
+    run_ms(60);
+    chk("pull: unshifted character", drain(), 1);    /* 'A', not 'a' */
+
+    /* the minimum press is not waived: a modifier released 5 ms after
+     * it became visible stays visible when another press is promoted
+     * (unless the scheduler stretched the 5 ms past the minimum) */
+    settle();
+    feed_cell(MROW, MBIT, 1);
+    hal_idle();
+    t_release = now_ms();               /* the modifier is visible from here */
+    run_ms(5);
+    feed_cell(MROW, MBIT, 0);
+    feed(1);
+    hal_idle();
+    n = visible_cell(MROW, MBIT);
+    result("pull: release short of the minimum press stays pending",
+           n == 1 || now_ms() - t_release >= 40, n, 1);
+    chk("pull: its press still visible at once", visible(), 1);
+    run_ms(90);
+    chk("pull: pending release promoted later", visible_cell(MROW, MBIT), 0);
+
+    /* 6. no pull-through without a press promotion: with another cell
+     * merely HELD (no new press edge anywhere), the flap of case 2 is
+     * still absorbed */
+    for (try = 0; try < TRIES; try++) {
+        settle();
+        feed_cell(MROW, MBIT, 1);
+        run_ms(60);
+        watch_reset();
+        worst = flap(60, 1);
+        if (worst < STALL_MS) break;
+    }
+    result("flap, other cell held: timeline held", worst < STALL_MS, worst, STALL_MS);
+    chk("flap, other cell held: press visible", seen_down, 1);
+    chk("flap, other cell held: never dropped", drops, 0);
+    feed_cell(MROW, MBIT, 0);
+    run_ms(60);
+    chk("flap, other cell held: still down", visible(), 1);
+    chk("flap, other cell held: never dropped afterwards", drops, 0);
+    settle();
 
     /* session reset: a held cell does not survive on either side */
     feed(1);

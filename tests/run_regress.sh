@@ -50,13 +50,15 @@ unit_test pcmb_ports_test
 unit_test gfxmirror_test
 # Keyboard character generation from the key matrix (halp8.c keyscan;
 # docs/APPROXIMATIONS.md item 32). Every key passes the key buffer
-# in real time (20 ms debounce, 40 ms minimum press), so it takes
+# in real time (instant press; release after 10 ms of stability and
+# a 40 ms minimum press), so it takes
 # roughly 10 s.
 unit_test keyscan_test
 # Key buffer between the host-fed matrix and the guest-visible one
-# (halp8.c kb_tick; docs/APPROXIMATIONS.md item 34): chatter is
-# swallowed, a settled press appears once, a quick tap stays visible
-# long enough. Real time, about 1.5 s.
+# (halp8.c kb_tick; docs/APPROXIMATIONS.md item 34): a press is
+# visible at once, release + re-press flaps never drop it, a quick
+# tap stays visible long enough, a press never overtakes a pending
+# release (pull-through). Real time, about 2.5 s.
 unit_test keybuffer_test
 # Disk-layer boundaries on synthetic D88 images built by the test
 # itself (review items C-2 / L-2), so this runs without the game

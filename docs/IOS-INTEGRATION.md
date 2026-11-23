@@ -31,8 +31,9 @@ void      p8_stop(P8Engine *e);
 int       p8_running(P8Engine *e);
 
 /* 入力: 文字キー (KC_* 含む) をキューへ、キーマトリクスは生の値を書く
- * (HAL がチャタリングを除去してからゲストに見せる。アプリ側の
- * デバウンスは不要: docs/APPROXIMATIONS.md 項目 34) */
+ * (押下は HAL が即座にゲストへ見せ、解放側のばたつきだけを HAL が
+ * 除去する。アプリ側のデバウンスは不要: docs/APPROXIMATIONS.md
+ * 項目 34) */
 void      p8_push_key(P8Engine *e, int code);
 void      p8_set_matrix(P8Engine *e, int idx, unsigned char v);
 

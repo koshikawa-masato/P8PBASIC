@@ -81,22 +81,41 @@ static int kq_push_if_empty(int code)
     return done;
 }
 
-/* ---- key buffer (debounce between the host feed and the guest) ----
+/* ---- key buffer (release filter between the host feed and the guest) ----
  * The host writes the RAW matrix; the guest (keyscan, hal_keymatrix =
  * INP ports 00-0E) reads kmatrix, the VISIBLE one. kb_tick() promotes
- * raw -> visible per cell, on the interpreter thread:
- *  - a raw value that differs from the visible one becomes visible
- *    once it has been stable for KB_DEBOUNCE_MS;
- *  - a release (visible down -> up) also waits until the visible
+ * raw -> visible per cell, on the interpreter thread, and the rule is
+ * asymmetric:
+ *  - a press (raw down, visible up) becomes visible at once, at the
+ *    first tick that sees it: a press edge from the host is
+ *    deliberate, and any wait here is felt as sluggish keys;
+ *  - a release (raw up, visible down) becomes visible only once the
+ *    raw release has been stable for KB_RELEASE_MS and the visible
  *    press has lasted KB_MIN_PRESS_MS, so once a tap is promoted it
  *    cannot fall between two guest polls. (A press that starts and
  *    ends entirely between two ticks is never promoted at all.)
- * A host feed (on-screen stick, game controller) can flap a cell
- * several times within a few ms; the genuine keyboard does not. This
- * models the keyboard's debouncing as a whole, not a chip's timing
- * (docs/APPROXIMATIONS.md item 34). Everything here is under km_mu:
- * the app thread writes the raw side, the engine thread reads it. */
-#define KB_DEBOUNCE_MS  20
+ * The releases are where a host feed flaps: a touch-assignment flip
+ * or a drifting controller stick produces release + re-press PAIRS
+ * within a few ms, which the genuine keyboard does not. A pair
+ * shorter than KB_RELEASE_MS is absorbed: the visible cell simply
+ * stays down through it.
+ * Snapshot consistency (pull-through): keyscan translates a press
+ * edge with the modifier levels (SHIFT, GRPH, CAPS, kana) of the same
+ * visible snapshot, and a genuine matrix is scanned as one consistent
+ * snapshot. So a press must not overtake a pending release: in a tick
+ * that promotes at least one press, every pending release whose
+ * visible press has already lasted KB_MIN_PRESS_MS is promoted too,
+ * without the KB_RELEASE_MS stability wait. (Release SHIFT, press a
+ * letter at once: the letter is seen unshifted.) Releases short of
+ * the minimum press stay pending. The cost: a flap's release half is
+ * let through if ANOTHER cell's press arrives during it; with no
+ * other press the pair is absorbed as before (a same-cell re-press
+ * is not a press promotion: the visible cell never went up).
+ * This models the keyboard's debouncing as a
+ * whole, not a chip's timing (docs/APPROXIMATIONS.md item 34).
+ * Everything here is under km_mu: the app thread writes the raw
+ * side, the engine thread reads it. */
+#define KB_RELEASE_MS   10
 #define KB_MIN_PRESS_MS 40
 static unsigned char kb_raw[16];        /* what the host last fed */
 static long long kb_raw_t[16][8];       /* when the cell's raw value last changed */
@@ -123,22 +142,35 @@ void halp8_set_matrix(int idx, unsigned char v)
 /* Promote the raw matrix into the guest-visible one (see above). */
 static void kb_tick(void)
 {
-    int row, bit;
+    int row, bit, pull = 0;
     long long now;
     pthread_mutex_lock(&km_mu);
     now = ks_now_ms();          /* inside the lock, as in the writer:
                                  * the ages judged below must be ages
                                  * at promotion time, not at call time */
-    
+
+    /* Pass 1: decide the press promotions. Every press (visible up,
+     * raw down; active-low) is promoted this tick, so all that has to
+     * be known before the releases are judged is whether there is one:
+     * if so, the releases below are pulled through. */
+    for (row = 0; row < 16 && !pull; row++)
+        if (kmatrix[row] & ~kb_raw[row]) pull = 1;
+
+    /* Pass 2: apply the presses, and the releases that may go. Under
+     * the same lock and the same `now`, so a press and a pulled-through
+     * release land in one visible snapshot. */
     for (row = 0; row < 16; row++) {
         int diff = kb_raw[row] ^ kmatrix[row];
         if (!diff) continue;
         for (bit = 0; bit < 8; bit++) {
             int m = 1 << bit;
             if (!(diff & m)) continue;
-            if (now - kb_raw_t[row][bit] < KB_DEBOUNCE_MS) continue;
-            if ((kb_raw[row] & m) &&        /* active-low: this is a release */
-                now - kb_vis_t[row][bit] < KB_MIN_PRESS_MS) continue;
+            if (kb_raw[row] & m) {          /* active-low: this is a release */
+                /* the minimum visible press is never waived */
+                if (now - kb_vis_t[row][bit] < KB_MIN_PRESS_MS) continue;
+                /* the stability wait is, when a press goes this tick */
+                if (!pull && now - kb_raw_t[row][bit] < KB_RELEASE_MS) continue;
+            }
             kmatrix[row] = (unsigned char)((kmatrix[row] & ~m) | (kb_raw[row] & m));
             kb_vis_t[row][bit] = now;
         }
