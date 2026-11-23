@@ -98,7 +98,11 @@ static int kq_push_if_empty(int code)
  * or a drifting controller stick produces release + re-press PAIRS
  * within a few ms, which the genuine keyboard does not. A pair
  * shorter than KB_RELEASE_MS is absorbed: the visible cell simply
- * stays down through it.
+ * stays down through it. A release must therefore be stable for
+ * 25 ms before the guest sees it (10 ms at first; raised after a
+ * device report of residual chatter in cursor movement, where the
+ * pairs ran longer than 10 ms). A deliberate release still lands
+ * within one poll of those 25 ms; the press side is untouched.
  * Snapshot consistency (pull-through): keyscan translates a press
  * edge with the modifier levels (SHIFT, GRPH, CAPS, kana) of the same
  * visible snapshot, and a genuine matrix is scanned as one consistent
@@ -115,7 +119,7 @@ static int kq_push_if_empty(int code)
  * whole, not a chip's timing (docs/APPROXIMATIONS.md item 34).
  * Everything here is under km_mu: the app thread writes the raw
  * side, the engine thread reads it. */
-#define KB_RELEASE_MS   10
+#define KB_RELEASE_MS   25
 #define KB_MIN_PRESS_MS 40
 static unsigned char kb_raw[16];        /* what the host last fed */
 static long long kb_raw_t[16][8];       /* when the cell's raw value last changed */

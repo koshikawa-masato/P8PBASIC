@@ -2,7 +2,7 @@
  * (halp8.c kb_tick; docs/APPROXIMATIONS.md item 34): the filter
  * between the matrix the host feeds (halp8_set_matrix) and the one
  * the guest sees (hal_keymatrix, keyscan). It is asymmetric: a press
- * is visible at the first tick, a release only after 10 ms of raw
+ * is visible at the first tick, a release only after 25 ms of raw
  * stability and 40 ms of visible press - except that a tick which
  * promotes a press also promotes every pending release that has had
  * its 40 ms (snapshot consistency; a second cell, SHIFT, is driven
@@ -11,7 +11,7 @@
  * scanner are pumped through hal_idle, the visible matrix is sampled
  * with hal_keymatrix and the generated characters are read back with
  * hal_getkey. The buffer reads the wall clock, so the timeline is
- * real time (about 2.5 s in total). A flap whose steps were stretched
+ * real time (about 3 s in total). A flap whose steps were stretched
  * by the scheduler towards the release time is not the scripted
  * signal any more; such a run is repeated (a few times at most).
  * Exit 0 = all checks pass. */
@@ -28,7 +28,13 @@
 #define MBIT 6
 #define FLAP_MS 3
 #define STALL_MS 8          /* a flap step this long is a scheduler stall
-                             * (it must stay under the 10 ms release time) */
+                             * (it must stay under the 25 ms release time) */
+#define PAIR_GAP_MS 15      /* the release half of a slow flap pair: longer
+                             * than the former 10 ms release time, shorter
+                             * than the 25 ms one */
+#define PAIR_STALL_MS 22    /* a gap stretched this far is a scheduler stall
+                             * (it must stay under the 25 ms release time) */
+#define PAIRS 4
 #define TRIES 5
 
 static int fails;
@@ -183,6 +189,40 @@ int main(void)
     chk("flap down: never dropped afterwards", drops, 0);
     chk("flap down: exactly one character", drain(), 1);
 
+    /* 2b. slow flap pairs: a held key (long past its minimum press,
+     * so only the stability wait guards it) whose raw cell goes up
+     * for 15 ms and comes back, a few times over. The gap is longer
+     * than the former 10 ms release time and shorter than the 25 ms
+     * one: the visible press never drops and no second character is
+     * generated (240 ms in all, short of the repeat delay) */
+    for (try = 0; try < TRIES; try++) {
+        int i;
+        settle();
+        feed(1);
+        run_ms(60);
+        worst = 0;
+        for (i = 0; i < PAIRS; i++) {
+            long gap;
+            feed(0);
+            run_ms(PAIR_GAP_MS);
+            gap = (long)(now_ms() - last_feed);
+            feed(1);
+            if (gap > worst) worst = gap;
+            run_ms(30);
+        }
+        if (worst < PAIR_STALL_MS) break;
+    }
+    result("slow pairs: timeline held", worst < PAIR_STALL_MS, worst, PAIR_STALL_MS);
+    chk("slow pairs: press visible", seen_down, 1);
+    chk("slow pairs: never dropped", drops, 0);
+    chk("slow pairs: still down", visible(), 1);
+    chk("slow pairs: exactly one character", drain(), 1);
+    feed(0);
+    run_ms(60);
+    chk("slow pairs: released afterwards", visible(), 0);
+    chk("slow pairs: one release", drops, 1);
+    chk("slow pairs: nothing after the release", drain(), 0);
+
     /* 3. a quick tap (50 ms): seen, once, and for long enough */
     settle();
     feed(1);
@@ -210,7 +250,8 @@ int main(void)
 
     /* 4. a normal hold (300 ms): visible at the first tick after the
      * feed, one character, no repeat yet; the release (long past the
-     * minimum press) is promoted once it has been stable for 10 ms */
+     * minimum press) is promoted once it has been stable for 25 ms,
+     * within a poll or so of that */
     settle();
     feed(1);
     hal_idle();
@@ -224,17 +265,18 @@ int main(void)
     t_release = last_feed;
     run_ms(80);
     chk("hold: released", visible(), 0);
-    result("hold: release only after 10 ms",
-           first_up - t_release >= 10, (long)(first_up - t_release), 10);
-    result("hold: release within 40 ms",
-           first_up - t_release <= 40, (long)(first_up - t_release), 40);
+    result("hold: release only after 25 ms",
+           first_up - t_release >= 25, (long)(first_up - t_release), 25);
+    result("hold: release within 55 ms",
+           first_up - t_release <= 55, (long)(first_up - t_release), 55);
     chk("hold: nothing after the release", drain(), 0);
 
     /* 5. snapshot consistency (pull-through): a press never overtakes
      * a release that has had its minimum press. SHIFT is held, then
-     * released and the A key pressed at once (well inside the 10 ms
-     * release time): the very first tick shows A down AND SHIFT up,
-     * so the scanner never translates A against the stale SHIFT */
+     * released and the A key pressed at once (well inside the 25 ms
+     * release time, which the pull-through waives): the very first
+     * tick shows A down AND SHIFT up, so the scanner never translates
+     * A against the stale SHIFT */
     settle();
     feed_cell(MROW, MBIT, 1);
     run_ms(100);
