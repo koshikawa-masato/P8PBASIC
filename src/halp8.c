@@ -505,6 +505,20 @@ void hal_idle(void)
     tick++;
     kb_tick();
     keyscan();
+    /* On hardware the interrupts run while BASIC waits for a key, so
+     * a resident driver keeps playing at the Ok prompt / an INPUT
+     * wait; the statement loop's pump never runs there. With the pump
+     * live, each idle pass therefore advances the machine by one
+     * statement's worth of emulated time and runs the pacer: the same
+     * equilibrium as the statement path (0.5 ms slices topped up
+     * against the audio lead by hal_poll). No fixed sleep here - the
+     * pacer owns the rate, and 1 ms on top of every 0.5 ms slice
+     * would halve the machine's speed. */
+    if (vessel_pump_live()) {
+        vessel_statement();
+        hal_poll();
+        return;
+    }
     /* When the guest is waiting for input there is nothing to
      * compute; yield real time so the interpreter does not spin
      * a core flat out inside the host application. */

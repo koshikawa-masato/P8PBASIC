@@ -171,16 +171,27 @@ static void *engine_thread(void *arg)
     hal_init(0);
     scr_init();
     g_init();
-    exit_after_run = 1;
+    /* exit_after_run stays 0 (the library default): the machine stays
+     * on after the boot program ends, as the genuine one does - BASIC
+     * sits at Ok and a resident driver the program started (ALPHA-
+     * MINI's pmd2g) keeps playing through the pump. The session ends
+     * only via p8_stop / a bail (stop request), or at once when the
+     * boot file does not open. A boot file that opens but is not a
+     * loadable program is no such end: the error is reported and the
+     * session sits at Ok with whatever part of it loaded, as the
+     * genuine interpreter does after a failed LOAD. */
     ok_needed = 0;
     if (setjmp(p8_bail_jmp) == 0) {
+        int loaded;
         p8_bail_armed = 1;
-        if (!prog_load(e->bootfile, 0)) {
+        loaded = prog_load_boot(e->bootfile);
+        if (loaded == 0) {
             p8_bail_armed = 0;
             e->running = 0;
             return 0;
         }
-        exec_direct_pending_set("RUN");
+        if (loaded > 0) exec_direct_pending_set("RUN");
+        else ok_needed = 1;     /* error already printed; no RUN */
         top_level();            /* leaves via hal_term -> p8_bail */
     }
     p8_bail_armed = 0;

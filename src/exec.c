@@ -1407,7 +1407,12 @@ static unsigned ext_build_stream(int sub, const long *nums,
 
 static void stmt_ext(int which)
 {
-    static const char *nm[3] = { "XDD", "XDE", "XDF" };
+    /* which: 0 = XDD, 1 = XDE, 2 = XDF, 3 = POLL. POLL is the
+     * ALPHA-MINI spelling of the XDF channel (mcg hooks the same EEA7
+     * vector and reads its command letters from (HL)), so 3 takes
+     * the XDF path throughout and differs only in the name shown. */
+    static const char *nm[4] = { "XDD", "XDE", "XDF", "POLL" };
+    int letters = (which == 2 || which == 3);
     char cmd[16];
     long nums[16];
     int arg_sep[16];
@@ -1419,7 +1424,7 @@ static void stmt_ext(int which)
     int n = 0, args = 1;
     int tr = getenv("P8P_TRACE_EXT") != 0;
     cmd[0] = 0;
-    if (which == 2) {
+    if (letters) {
         while (*txtptr == ' ') txtptr++;
         while (isalpha(*txtptr)) {
             if (n < (int)sizeof(cmd) - 1) cmd[n++] = (char)toupper(*txtptr);
@@ -1430,7 +1435,7 @@ static void stmt_ext(int which)
     }
     if (tr) {
         fprintf(stderr, "%s", nm[which]);
-        if (which == 2) fprintf(stderr, " %s", cmd);
+        if (letters) fprintf(stderr, " %s", cmd);
     }
     while (args) {
         VAL v;
@@ -1483,13 +1488,15 @@ static void stmt_ext(int which)
             vessel_prime_arg(nums[0]);
             vessel_call(target, (unsigned)hal_peek(0, hl), hl, 0xEEA1, 0);
         }
-    } else if (which == 2 && cmd[0]) {
-        /* XDF: relay to the FFDF handler (the EEA7 vector's target;
+    } else if (letters && cmd[0]) {
+        /* XDF / POLL: relay to the FFDF handler (the EEA7 vector's target;
          * BC = the vector address, HL = the command letter, A = that
          * letter — docs/NEOMSC-CONTRACT.md. Stock NEOMSC reloads A
-         * from (HL), but a handler dispatching on A needs it). */
+         * from (HL), but a handler dispatching on A needs it). POLL
+         * builds the same stream, FF DF header included: mcg never
+         * looks behind HL, so the guest protocol is identical. */
         unsigned target;
-        if (vessel_relay_target(0xEEA7, nm[2], &target)) {
+        if (vessel_relay_target(0xEEA7, nm[which], &target)) {
             unsigned p = EXT_STREAM, i;
             p = ext_put(p, 0xFF); p = ext_put(p, 0xDF); p = ext_put(p, 0x20);
             for (i = 0; cmd[i]; i++) p = ext_put(p, (unsigned char)cmd[i]);
@@ -1848,6 +1855,7 @@ static void exec_stmt(void)
     case T_XDD: stmt_ext(0); break;
     case T_XDE: stmt_ext(1); break;
     case T_XDF: stmt_ext(2); break;
+    case T_POLL: stmt_ext(3); break;
     case T_CLS: stmt_cls(); break;
     case T_WIDTH: stmt_width(); break;
     case T_ELSE: while (*txtptr) txtptr = skip_token(txtptr); return;
@@ -2072,6 +2080,23 @@ int prog_load(const char *fname, int merge)
     }
     fclose(fp);
     return 1;
+}
+
+/* The boot program's load, issued before top_level runs. berror
+ * longjmps to top_jmp, which only top_level arms, so a load made
+ * ahead of it needs its own landing pad - and even a well-sniffed
+ * file can still raise from tokenize. Returns prog_load's result
+ * (0: the file did not open), or -1 when a berror landed here; the
+ * error is already on the screen by then. The direct-mode state is
+ * set first, as top_level does: an earlier session of this process
+ * that bailed mid-RUN must not send berror to its dead run_jmp. */
+int prog_load_boot(const char *fname)
+{
+    running = 0;
+    run_jmp_valid = 0;
+    curline = 0xFFFF;
+    if (setjmp(top_jmp)) return -1;
+    return prog_load(fname, 0);
 }
 
 int prog_save(const char *fname)

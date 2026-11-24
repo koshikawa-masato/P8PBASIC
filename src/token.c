@@ -27,6 +27,7 @@ static const KW kwtab[] = {
  {"CONSOLE",T_CONSOLE,0},{"KEY",T_KEY,0},{"BEEP",T_BEEP,0},{"SOUND",T_SOUND,0},
  {"BLOAD",T_BLOAD,0},{"BSAVE",T_BSAVE,0},{"EDIT",T_EDIT,0},{"TO",T_TO,0},
  {"XDD",T_XDD,0},{"XDE",T_XDE,0},{"XDF",T_XDF,0},
+ {"POLL",T_POLL,0},
  {"THEN",T_THEN,0},{"TAB",T_TAB,0},{"STEP",T_STEP,0},{"USR",T_USR,0},
  {"FN",T_FN,0},{"SPC",T_SPC,0},{"NOT",T_NOT,0},{"ERL",T_ERL,0},
  {"ERR",T_ERR,0},{"USING",T_USING,0},{"AND",T_AND,0},

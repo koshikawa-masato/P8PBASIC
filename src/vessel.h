@@ -32,6 +32,7 @@ unsigned long vessel_frame_count(void);   /* VRTC period wraps since session res
 void vessel_pump(void);                            /* advance emulated time by one full pump slice + deliver due interrupts (bulk waits inside one statement) */
 void vessel_charge(long cycles);                   /* advance emulated time by a builtin's modelled work (INP / PRINT / LINE; work, not scaled by the clock multiplier) + deliver due interrupts, polling the HAL once per slice */
 void vessel_statement(void);                      /* advance emulated time by one BASIC statement's modelled cost + deliver due interrupts (exec_loop, once per pass) */
+int  vessel_pump_live(void);                       /* 1 once the session's first vessel_init() switched the pump on (hal_idle advances the machine during input waits only then) */
 unsigned long vessel_opn_keyons(void);             /* OPNA key on/off write count (diagnostics) */
 unsigned long vessel_opn_writes(void);             /* OPNA bank-0 write total (diagnostics) */
 unsigned long vessel_opn_writes1(void);            /* OPNA bank-1 write total (diagnostics) */

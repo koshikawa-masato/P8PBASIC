@@ -1130,6 +1130,24 @@ static int trap(void)
         emu_ret();
         return 1;
     }
+    if (pc == 0x1B9D) {     /* ROM: the evaluated value as a word -> HL.
+                             * The word form of 0x18A3's fetch, read
+                             * from the same RST 8 mirror cell
+                             * (0xEC45 lo / 0xEC46 hi). Known caller:
+                             * mcg's argument helper at 0xA7D4 (CALL
+                             * 0x11D3, CALL 0x1B9D, EX DE,HL), whose
+                             * R/T/K paths store the result into
+                             * pmd2g's work cells 0xAA0F/11/13. It
+                             * keeps the stream pointer itself (PUSH
+                             * HL / POP HL around the calls), so only
+                             * H and L are set. Left to the generic
+                             * ROM skip, HL came back unset and
+                             * XDF R,&H4C00 stored 0x0000. */
+        cpu.l = (uint8_t)hal_peek(0, 0xEC45);
+        cpu.h = (uint8_t)hal_peek(0, 0xEC46);
+        emu_ret();
+        return 1;
+    }
     if (pc == 0x11D3) {     /* ROM: evaluate the argument at HL and
                              * leave the result in the (0xEC41) value
                              * cell. For a number that cell holds the
@@ -1774,6 +1792,13 @@ void vessel_pump(void)
 void vessel_statement(void)
 {
     pump_advance(STMT_CYCLES);
+}
+
+/* Is the pump on? The embedded HAL's input wait asks (hal_idle): only
+ * a live machine has emulated time to advance while BASIC waits. */
+int vessel_pump_live(void)
+{
+    return pump_live;
 }
 
 /* Modelled work of a builtin beyond the flat statement cost (INP's
